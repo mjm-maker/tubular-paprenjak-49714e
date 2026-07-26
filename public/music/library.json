@@ -1,0 +1,122 @@
+[
+  {
+    "id": "calm-01",
+    "title": "Soft Morning",
+    "category": "Calm",
+    "src": "/music/soft-morning.mp3",
+    "duration": 28.24,
+    "artist": "GLASKO Library",
+    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
+    "mood": "Weightless piano-pad haze, no percussion"
+  },
+  {
+    "id": "calm-02",
+    "title": "Still Water",
+    "category": "Calm",
+    "src": "/music/still-water.mp3",
+    "duration": 24,
+    "artist": "GLASKO Library",
+    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
+    "mood": "Slow swelling pads over a low drone"
+  },
+  {
+    "id": "inspirational-01",
+    "title": "First Light",
+    "category": "Inspirational",
+    "src": "/music/first-light.mp3",
+    "duration": 20.87,
+    "artist": "GLASKO Library",
+    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
+    "mood": "Rising arpeggio, soft kick, wide pad"
+  },
+  {
+    "id": "inspirational-02",
+    "title": "Open Road",
+    "category": "Inspirational",
+    "src": "/music/open-road.mp3",
+    "duration": 19.2,
+    "artist": "GLASKO Library",
+    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
+    "mood": "Anthemic chord plucks with a steady pulse"
+  },
+  {
+    "id": "cinematic-01",
+    "title": "Wide Horizon",
+    "category": "Cinematic",
+    "src": "/music/wide-horizon.mp3",
+    "duration": 25.26,
+    "artist": "GLASKO Library",
+    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
+    "mood": "Minor pad swells, low drone, distant hits"
+  },
+  {
+    "id": "cinematic-02",
+    "title": "Slow Reveal",
+    "category": "Cinematic",
+    "src": "/music/slow-reveal.mp3",
+    "duration": 24,
+    "artist": "GLASKO Library",
+    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
+    "mood": "Suspended chords opening up across eight bars"
+  },
+  {
+    "id": "energetic-01",
+    "title": "Pulse Line",
+    "category": "Energetic",
+    "src": "/music/pulse-line.mp3",
+    "duration": 15.48,
+    "artist": "GLASKO Library",
+    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
+    "mood": "Four-on-the-floor with a pumping bass and stabs"
+  },
+  {
+    "id": "energetic-02",
+    "title": "Neon Run",
+    "category": "Energetic",
+    "src": "/music/neon-run.mp3",
+    "duration": 15,
+    "artist": "GLASKO Library",
+    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
+    "mood": "Driving sixteenth-note arpeggio"
+  },
+  {
+    "id": "business-01",
+    "title": "Clean Slate",
+    "category": "Business",
+    "src": "/music/clean-slate.mp3",
+    "duration": 17.78,
+    "artist": "GLASKO Library",
+    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
+    "mood": "Bright plucks, light kick, unobtrusive"
+  },
+  {
+    "id": "business-02",
+    "title": "Steady Hand",
+    "category": "Business",
+    "src": "/music/steady-hand.mp3",
+    "duration": 19.2,
+    "artist": "GLASKO Library",
+    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
+    "mood": "Marimba-style motif with a calm pulse"
+  },
+  {
+    "id": "ambient-01",
+    "title": "Deep Field",
+    "category": "Ambient",
+    "src": "/music/deep-field.mp3",
+    "duration": 24,
+    "artist": "GLASKO Library",
+    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
+    "mood": "Slowly beating drones, no pulse at all"
+  },
+  {
+    "id": "ambient-02",
+    "title": "Night Air",
+    "category": "Ambient",
+    "src": "/music/night-air.mp3",
+    "duration": 24,
+    "artist": "GLASKO Library",
+    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
+    "mood": "Sparse high pings over a soft low bed"
+  }
+]

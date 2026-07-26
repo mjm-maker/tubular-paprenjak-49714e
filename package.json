@@ -1,0 +1,35 @@
+{
+  "name": "glasko-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GLASKO - turn your voice into social video",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "music:build": "node scripts/generate-music.js"
+  },
+  "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
+    "@netlify/database": "^1.1.0",
+    "drizzle-orm": "^1.0.0-beta.22",
+    "mp4-muxer": "^5.2.1",
+    "next": "^15.5.4",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@netlify/plugin-nextjs": "^5.13.4",
+    "@tailwindcss/postcss": "^4.1.14",
+    "@types/node": "^22.18.8",
+    "@types/react": "^19.1.16",
+    "@types/react-dom": "^19.1.11",
+    "drizzle-kit": "beta",
+    "lamejs": "^1.2.1",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.14",
+    "typescript": "^5.9.3"
+  }
+}

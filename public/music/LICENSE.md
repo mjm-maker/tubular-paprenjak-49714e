@@ -8,7 +8,7 @@ signal chain, so no other party holds a claim on them.
 
 ## License
 
-The twelve MP3 files in this folder are released under
+The eight MP3 files in this folder are released under
 [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/) — the
 rights holder has waived copyright and placed them in the public domain
 worldwide. You may use, modify and redistribute them, commercially or not, with
@@ -19,23 +19,24 @@ Instagram, YouTube, Facebook and anywhere else.
 
 | File | Title | Category |
 | --- | --- | --- |
-| `soft-morning.mp3` | Soft Morning | Calm |
-| `still-water.mp3` | Still Water | Calm |
-| `first-light.mp3` | First Light | Inspirational |
-| `open-road.mp3` | Open Road | Inspirational |
-| `wide-horizon.mp3` | Wide Horizon | Cinematic |
-| `slow-reveal.mp3` | Slow Reveal | Cinematic |
-| `pulse-line.mp3` | Pulse Line | Energetic |
-| `neon-run.mp3` | Neon Run | Energetic |
-| `clean-slate.mp3` | Clean Slate | Business |
+| `northern-light.mp3` | Northern Light | Cinematic |
+| `long-shadow.mp3` | Long Shadow | Cinematic |
+| `quiet-rooms.mp3` | Quiet Rooms | Calm |
+| `small-victories.mp3` | Small Victories | Inspirational |
+| `slow-tide.mp3` | Slow Tide | Cinematic |
 | `steady-hand.mp3` | Steady Hand | Business |
-| `deep-field.mp3` | Deep Field | Ambient |
-| `night-air.mp3` | Night Air | Ambient |
+| `clear-signal.mp3` | Clear Signal | Business |
+| `warm-static.mp3` | Warm Static | Ambient |
 
 All are 32 kHz mono MP3, encoded at 80 kbps, level-matched to a common RMS so
 switching tracks in the picker does not jump in loudness, and written so the end
 joins the beginning without a click — the app loops them whenever the voice
 recording is longer than the track.
+
+Every track except `steady-hand.mp3` is also run through `duckMids()` in the
+generator, a broad, shallow dip between roughly 380 Hz and 3.4 kHz. That is the
+band a speaking voice occupies, so the dip is what lets the bed keep its weight
+and its air while staying out of the way of the words.
 
 `library.json` is the catalogue the app reads. It is rewritten by the generator
 script; edit the script rather than the JSON.

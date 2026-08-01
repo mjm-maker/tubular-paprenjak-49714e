@@ -39,9 +39,17 @@ export async function transcodeToMp4(
 
   try {
     await ffmpeg.writeFile('input.webm', new Uint8Array(await input.arrayBuffer()));
-    await ffmpeg.exec([
+    const exitCode = await ffmpeg.exec([
       '-i',
       'input.webm',
+      // Both streams are mapped by name. Left to its own stream selection, ffmpeg will
+      // still write a perfectly valid video-only MP4 if anything is odd about the audio
+      // stream, and a silent file that converted "successfully" is the worst outcome
+      // here — asking for the track explicitly makes its absence an error instead.
+      '-map',
+      '0:v:0',
+      '-map',
+      '0:a:0',
       '-c:v',
       'libx264',
       '-preset',
@@ -71,6 +79,9 @@ export async function transcodeToMp4(
       '+faststart',
       'output.mp4',
     ]);
+    if (exitCode !== 0) {
+      throw new Error('The converter could not produce an MP4 with both picture and sound.');
+    }
 
     const data = await ffmpeg.readFile('output.mp4');
     const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;

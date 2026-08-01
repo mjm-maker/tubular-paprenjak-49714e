@@ -211,6 +211,80 @@ export function MusicIcon({ className = 'h-5 w-5' }: IconProps) {
   );
 }
 
+/** No background music. A speaker with the waves struck through. */
+export function MuteIcon({ className = 'h-5 w-5' }: IconProps) {
+  return (
+    <svg
+      className={`${base} ${className}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M11 5.5 6.8 9H4.2a.7.7 0 0 0-.7.7v4.6a.7.7 0 0 0 .7.7h2.6L11 18.5Z" />
+      <path d="m16 9.6 4.4 4.8M20.4 9.6 16 14.4" />
+    </svg>
+  );
+}
+
+/** Subtitles. A frame with two text lines in it. */
+export function CaptionIcon({ className = 'h-5 w-5' }: IconProps) {
+  return (
+    <svg
+      className={`${base} ${className}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3.2" y="4.8" width="17.6" height="14.4" rx="2.2" />
+      <path d="M7 11.4h6M7 15h10" />
+    </svg>
+  );
+}
+
+/** Output format. Two nested frames. */
+export function FrameIcon({ className = 'h-5 w-5' }: IconProps) {
+  return (
+    <svg
+      className={`${base} ${className}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="2.8" y="6.6" width="18.4" height="10.8" rx="1.8" />
+      <rect x="8.4" y="3.4" width="7.2" height="17.2" rx="1.8" />
+    </svg>
+  );
+}
+
+/** The watermark step: the brand bars inside a rounded badge. */
+export function StampIcon({ className = 'h-5 w-5' }: IconProps) {
+  return (
+    <svg
+      className={`${base} ${className}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="5.4" width="18" height="13.2" rx="3" />
+      <path d="M8.6 10.4v3.2M12 8.6v6.8M15.4 11v2" />
+    </svg>
+  );
+}
+
 /** The GLASKO mark: three ascending bars. */
 export function BrandMark({ className = 'h-5 w-5' }: IconProps) {
   return (
@@ -244,70 +318,6 @@ export function SparkIcon({ className = 'h-4 w-4' }: IconProps) {
   return (
     <svg className={`${base} ${className}`} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
       <path d="M12 2.5l1.9 5.1a3 3 0 0 0 1.8 1.8l5.1 1.9-5.1 1.9a3 3 0 0 0-1.8 1.8L12 20.1l-1.9-5.1a3 3 0 0 0-1.8-1.8L3.2 11.3l5.1-1.9a3 3 0 0 0 1.8-1.8L12 2.5Z" />
-    </svg>
-  );
-}
-
-/* Network marks. Simplified single-colour silhouettes so they inherit the palette and
-   need no third-party icon package. */
-
-export function FacebookIcon({ className = 'h-4 w-4' }: IconProps) {
-  return (
-    <svg className={`${base} ${className}`} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M22 12.06C22 6.5 17.52 2 12 2S2 6.5 2 12.06C2 17.08 5.66 21.25 10.44 22v-7.03H7.9v-2.91h2.54V9.85c0-2.51 1.49-3.9 3.77-3.9 1.1 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.78-1.63 1.57v1.88h2.78l-.45 2.91h-2.33V22C18.34 21.25 22 17.08 22 12.06Z" />
-    </svg>
-  );
-}
-
-export function WhatsAppIcon({ className = 'h-4 w-4' }: IconProps) {
-  return (
-    <svg className={`${base} ${className}`} viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M12.05 3.2a8.8 8.8 0 0 0-7.5 13.4L3.3 20.8l4.32-1.2a8.8 8.8 0 1 0 4.43-16.4Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M9.1 7.9c.2 0 .38.01.55.02.18.01.4-.07.63.47.23.55.8 1.94.87 2.08.07.14.11.31.02.5-.09.19-.14.31-.28.48-.14.16-.3.36-.42.48-.14.14-.28.3-.12.58.16.28.72 1.2 1.56 1.95.99.88 1.83 1.17 2.1 1.31.28.14.44.12.6-.07.16-.19.7-.8.88-1.08.19-.28.37-.23.63-.14.25.1 1.6.76 1.88.9.28.14.46.21.53.33.07.13.07.75-.18 1.47-.25.72-1.47 1.4-2.03 1.44-.56.05-1.09.25-3.68-.77-3.13-1.23-5.05-4.5-5.2-4.7-.14-.19-1.2-1.6-1.2-3.05s.77-2.17 1.04-2.47c.28-.3.6-.37.79-.37Z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
-
-export function TelegramIcon({ className = 'h-4 w-4' }: IconProps) {
-  return (
-    <svg className={`${base} ${className}`} viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M21.6 3.6 2.9 11c-.9.35-.86 1.63.06 1.93l4.5 1.45 1.7 5.1c.28.85 1.4 1.02 1.93.3l2.28-3.1 4.64 3.42c.72.53 1.75.14 1.94-.74l3.06-14.1c.2-.9-.68-1.66-1.4-1.66Z"
-        fill="currentColor"
-      />
-      <path
-        d="m9.36 14.6 9.1-7.6-9.1 5.9v3.9"
-        fill="none"
-        stroke="var(--color-ink)"
-        strokeWidth="1.1"
-        strokeLinejoin="round"
-        opacity="0.55"
-      />
-    </svg>
-  );
-}
-
-export function XIcon({ className = 'h-4 w-4' }: IconProps) {
-  return (
-    <svg className={`${base} ${className}`} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M17.9 2.7h3.3l-7.2 8.24L22.4 21.3h-6.63l-5.19-6.79-5.94 6.79H1.34l7.7-8.8L1.2 2.7h6.8l4.83 6.39 5.07-6.39Zm-1.16 16.5h1.83L6.35 4.7H4.39l12.35 14.5Z" />
-    </svg>
-  );
-}
-
-export function LinkedInIcon({ className = 'h-4 w-4' }: IconProps) {
-  return (
-    <svg className={`${base} ${className}`} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M4.6 3.2a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8ZM2.4 20.8h4.4V9.6H2.4v11.2Zm6.9 0h4.4v-6.1c0-1.6.3-3.1 2.28-3.1 1.9 0 1.9 1.78 1.9 3.2v6h4.42v-6.87c0-4.06-.88-6.53-4.63-6.53-1.8 0-3 .99-3.5 1.93h-.06V9.6H9.3v11.2Z" />
     </svg>
   );
 }

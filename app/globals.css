@@ -11,8 +11,12 @@
   --color-clay: #b4502c;
 
   --font-display: var(--font-instrument-serif), 'Iowan Old Style', Georgia, serif;
-  --font-sans: var(--font-familjen), ui-sans-serif, system-ui, sans-serif;
+  /* Inter sits behind Familjen Grotesk so Cyrillic in the interface — an edited
+     Bulgarian subtitle, for instance — falls back to a face that actually has it. */
+  --font-sans: var(--font-familjen), var(--font-inter), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-dm-mono), ui-monospace, 'SFMono-Regular', monospace;
+  /* Canvas subtitles and the watermark. Full Latin + Cyrillic, one face. */
+  --font-caption: var(--font-inter), 'Inter', ui-sans-serif, system-ui, sans-serif;
 
   --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
 }

@@ -15,6 +15,7 @@
 
 import { BAND_COUNT, type FrameData } from './analysis';
 import { DEFAULT_FORMAT, type Layout, layoutFor, type VideoFormat } from './layout';
+import { type BrandLogo, tintedBrandLogo } from './logo';
 import {
   cueAt,
   cueText,
@@ -40,6 +41,12 @@ export interface RenderSpec {
   animation: AnimationKind;
   /** `sans` carries Cyrillic and is what subtitles and the watermark are set in. */
   fonts: { display: string; mono: string; sans: string };
+  /**
+   * The GLASKO logo, once `loadBrandLogo()` has it. Absent — still loading, blocked,
+   * or no DOM at all — and the frame falls back to the drawn wordmark, so the picture
+   * is never missing a brand mark.
+   */
+  logo?: BrandLogo | null;
   subtitles?: { cues: SubtitleCue[]; settings: SubtitleSettings } | null;
   /**
    * Always the output of `watermarkFor()` — the one place `enabled` is decided. In the
@@ -357,6 +364,33 @@ function paintBars(ctx: Ctx2D, layout: Layout, frame: FrameData, theme: RenderTh
 }
 
 /**
+ * The logo's slot in the frame: exactly the one the drawn wordmark occupied.
+ *
+ * Height is tied to `wordmarkSize`, so the mark scales with each format's type
+ * instead of carrying pixel values that only suit 9:16 — the logo's lettering lands
+ * at the cap height the text had, and its waveform glyph in the space the three bars
+ * used. Width follows from the file's own aspect ratio, never the other way round, so
+ * the logo can only ever be scaled, never stretched. The box is centred on the old
+ * cap height rather than sat on its baseline, which keeps the lettering optically
+ * where it was while leaving room for the waveform's tail below it.
+ *
+ * The width cap is a guard rather than a limit anything hits today: it keeps the mark
+ * clear of the duration clock on the far side of the same row, whatever a future
+ * format's margins are.
+ */
+function logoBox(
+  layout: Layout,
+  logo: BrandLogo,
+): { x: number; y: number; width: number; height: number } {
+  const aspect = logo.width / logo.height;
+  const maxWidth = (layout.width - layout.margin * 2) * 0.42;
+  const width = Math.min(layout.wordmarkSize * 1.2 * aspect, maxWidth);
+  const height = width / aspect;
+  const capCentre = layout.wordmarkY - layout.wordmarkSize * 0.36;
+  return { x: layout.margin, y: capCentre - height / 2, width, height };
+}
+
+/**
  * Wordmark, rule, progress rail and timings.
  *
  * `chromeShift` moves the rail and the timings vertically. Subtitles are placed
@@ -375,21 +409,36 @@ function paintChrome(
   const railY = layout.railY + chromeShift;
   const timeY = layout.timeY + chromeShift;
 
-  // Brand mark: three ascending bars, then the wordmark.
   ctx.save();
-  ctx.fillStyle = rgba(theme.accent, 0.95);
-  const markHeights = [22, 38, 28];
-  markHeights.forEach((height, index) => {
-    roundedRect(ctx, margin + index * 13, wordmarkY - height, 7, height, 3.5);
-    ctx.fill();
-  });
+  if (spec.logo) {
+    // The logo file. Its own colours are warm bone and gold, made for a dark frame,
+    // so a light background gets the single-colour silhouette instead — same shape,
+    // theme ink, exactly the adaptation the text wordmark made before it.
+    const box = logoBox(layout, spec.logo);
+    const art = theme.light ? tintedBrandLogo(spec.logo, theme.fg) : spec.logo.image;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.globalAlpha = 0.95;
+    ctx.drawImage(art, box.x, box.y, box.width, box.height);
+    ctx.globalAlpha = 1;
+  } else {
+    // Fallback while the logo loads, or if it never does: the drawn mark — three
+    // ascending bars, then the wordmark.
+    ctx.fillStyle = rgba(theme.accent, 0.95);
+    const markHeights = [22, 38, 28];
+    markHeights.forEach((height, index) => {
+      roundedRect(ctx, margin + index * 13, wordmarkY - height, 7, height, 3.5);
+      ctx.fill();
+    });
 
-  ctx.fillStyle = rgba(theme.fg, 0.9);
-  ctx.font = `500 ${wordmarkSize}px ${spec.fonts.display}`;
-  ctx.textBaseline = 'alphabetic';
-  drawTracked(ctx, 'GLASKO', margin + 60, wordmarkY, 7);
+    ctx.fillStyle = rgba(theme.fg, 0.9);
+    ctx.font = `500 ${wordmarkSize}px ${spec.fonts.display}`;
+    ctx.textBaseline = 'alphabetic';
+    drawTracked(ctx, 'GLASKO', margin + 60, wordmarkY, 7);
+  }
 
   ctx.font = `500 ${layout.clockSize}px ${spec.fonts.mono}`;
+  ctx.textBaseline = 'alphabetic';
   ctx.fillStyle = rgba(theme.fg, 0.45);
   drawTracked(ctx, formatClock(frame.duration), width - margin, wordmarkY - 4, 3, 'right');
 

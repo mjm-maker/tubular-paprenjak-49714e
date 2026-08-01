@@ -15,6 +15,16 @@ The step order is the editing flow and is deliberate: voice → background → a
 
 The whole design rests on one rule: **the preview and the exported video use the same draw call.** `drawFrame(ctx, frame, spec, frameIndex, scale)` in `lib/render.ts` always draws into the coordinate space of `spec.format` — 1080 × 1920, 1080 × 1080 or 1920 × 1080, from `lib/layout.ts` — and is scaled to fit whatever canvas it is given via `ctx.setTransform`. The preview passes a small scale; the encoder passes `1`. If you add a visual element, add it inside `drawFrame` — anything drawn elsewhere will appear in one and not the other, which is exactly the "it's only a mockup" failure this app is built to avoid. Subtitles and the watermark are drawn there for that reason, not composited over the preview.
 
+### Branding
+
+There is one logo file, `public/glasko-logo.png`, and it is used in all three places the mark appears: the page header (an `<img>` in `app/page.tsx`), the top-left of the video frame, and therefore the exported MP4. `lib/logo.ts` is the browser-side half — `loadBrandLogo()` decodes the file once per tab into a `BrandLogo` carrying the artwork *and its intrinsic size*, which is what the renderer derives the aspect ratio from, so replacing the PNG can never stretch it.
+
+Drawing is synchronous and loading is not, so the logo reaches the renderer as `RenderSpec.logo` and `paintChrome` keeps the original drawn wordmark — three ascending bars plus tracked text — as the fallback for a frame painted before the file arrives, a blocked request, or a non-browser context. **That fallback is why the frame is never unbranded; do not delete it.** The in-frame position and size come from `layout.margin`, `layout.wordmarkY` and `layout.wordmarkSize` rather than pixel constants, so all three formats place the mark on the row and at the type scale the wordmark had.
+
+The artwork is bone lettering with a gold waveform, made for a dark frame, so `tintedBrandLogo()` supplies a single-colour silhouette in `theme.fg` for the light backgrounds (Bone, Sandstone) — the same adaptation the text wordmark made when it read its colour from the theme. It reuses the file's own alpha channel, so only the colour changes.
+
+The header logo and the in-frame logo are **not** the "Made with GLASKO" watermark, which stays a separate element owned by `lib/watermark.ts` and is still mandatory. Two marks in one frame is intentional: the logo is part of the design, the watermark is attribution.
+
 `lib/layout.ts` is the single source of the three shapes and, through `layoutFor(format)`, of the safe area each one leaves for the platform's own buttons. Read positions out of it rather than hardcoding pixels: a subtitle block or watermark that is correct at 9:16 and clipped at 16:9 is the failure this file exists to prevent.
 
 

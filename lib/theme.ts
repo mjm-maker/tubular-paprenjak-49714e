@@ -36,11 +36,17 @@ export const GRADIENT_BACKGROUNDS: Extract<BackgroundChoice, { kind: 'gradient' 
 
 export const DEFAULT_BACKGROUND = GRADIENT_BACKGROUNDS[0];
 
-export type AnimationKind = 'wave' | 'bars';
+/**
+ * `none` is a real choice, not an absence: the renderer skips the animation layer
+ * entirely for it rather than drawing something invisible, so the frame is the
+ * background plus subtitles, chrome and watermark and nothing else.
+ */
+export type AnimationKind = 'wave' | 'bars' | 'none';
 
 export const ANIMATIONS: Array<{ id: AnimationKind; label: string; blurb: string }> = [
   { id: 'wave', label: 'Waveform', blurb: 'Scrolling wave with a centre playhead' },
   { id: 'bars', label: 'Audio bars', blurb: 'Frequency bars reacting to each syllable' },
+  { id: 'none', label: 'No animation', blurb: 'Background, subtitles and voice only' },
 ];
 
 // --- colour maths ---------------------------------------------------------

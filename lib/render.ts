@@ -27,7 +27,7 @@ import {
   type SubtitleSettings,
 } from './subtitles';
 import { type AnimationKind, type BackgroundChoice, type RenderTheme, rgba, themeFor } from './theme';
-import { WATERMARK_NAME, WATERMARK_PREFIX, type WatermarkSettings } from './watermark';
+import { WATERMARK_NAME, WATERMARK_PREFIX, type ResolvedWatermark } from './watermark';
 
 export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
@@ -36,11 +36,17 @@ export interface RenderSpec {
   background: BackgroundChoice;
   /** Loaded bitmap for an uploaded image background. */
   backgroundImage?: CanvasImageSource | null;
+  /** `none` means no animation layer is painted at all — see `drawFrame`. */
   animation: AnimationKind;
   /** `sans` carries Cyrillic and is what subtitles and the watermark are set in. */
   fonts: { display: string; mono: string; sans: string };
   subtitles?: { cues: SubtitleCue[]; settings: SubtitleSettings } | null;
-  watermark?: WatermarkSettings;
+  /**
+   * Always the output of `watermarkFor()` — the one place `enabled` is decided. In the
+   * free version that means the mark is on, so the guard below is for a future paid
+   * plan, not for a user setting.
+   */
+  watermark?: ResolvedWatermark;
 }
 
 // --- helpers --------------------------------------------------------------
@@ -933,8 +939,11 @@ export function drawFrame(
   const theme = themeFor(spec.background);
   paintBackground(ctx, layout, spec, theme);
 
+  // The animation layer is skipped outright for `none` — no placeholder, no rail,
+  // no minimum-amplitude line. Every pipeline shares this call, so the exported MP4
+  // omits it for exactly the same reason the preview does.
   if (spec.animation === 'wave') paintWave(ctx, layout, frame, theme);
-  else paintBars(ctx, layout, frame, theme);
+  else if (spec.animation === 'bars') paintBars(ctx, layout, frame, theme);
 
   // Subtitles are measured before the chrome is drawn so the chrome can move out
   // of their way instead of overlapping them.

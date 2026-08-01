@@ -103,23 +103,21 @@ export default function FormatPanel({
           <span className="label-mono">Watermark</span>
         </div>
 
-        <label className="flex cursor-pointer items-start gap-3 text-sm">
-          <input
-            type="checkbox"
-            checked={watermark.enabled}
-            onChange={(event) => onWatermark({ ...watermark, enabled: event.target.checked })}
-            className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-ember)]"
-          />
+        {/* The mark is mandatory in the free version, so this states it rather than
+            offering it: there is no control here that can clear it, and
+            `WatermarkSettings` has no field one could set. Only the corner is a choice. */}
+        <div className="flex items-start gap-3 text-sm">
+          <CheckIcon className="mt-1 h-3.5 w-3.5 shrink-0 text-ember" />
           <span>
             <span className="text-bone">
-              Show &ldquo;{WATERMARK_PREFIX} {WATERMARK_NAME}&rdquo;
+              Every video carries &ldquo;{WATERMARK_PREFIX} {WATERMARK_NAME}&rdquo;
             </span>
             <span className="label-mono mt-1 block normal-case tracking-normal">
               A small soundwave mark in the corner, inside the safe area, burned into the
-              exported file — not just the preview.
+              exported file — not just the preview. Pick the corner it sits in.
             </span>
           </span>
-        </label>
+        </div>
 
         <div
           className="mt-5 grid grid-cols-2 gap-2.5"
@@ -132,10 +130,9 @@ export default function FormatPanel({
               <button
                 key={id}
                 type="button"
-                disabled={!watermark.enabled}
                 onClick={() => onWatermark({ ...watermark, position: id })}
                 aria-pressed={active}
-                className="flex items-center justify-between gap-2 border px-3.5 py-2.5 text-sm transition-colors disabled:opacity-40"
+                className="flex items-center justify-between gap-2 border px-3.5 py-2.5 text-sm transition-colors"
                 style={{
                   borderColor: active ? 'var(--color-ember)' : 'rgba(242,236,224,0.12)',
                   background: active ? 'rgba(240,135,60,0.07)' : 'transparent',

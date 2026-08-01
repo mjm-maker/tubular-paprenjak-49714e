@@ -11,6 +11,16 @@ interface AnimationPanelProps {
 function MotionGlyph({ kind, active }: { kind: AnimationKind; active: boolean }) {
   const color = active ? 'var(--color-ember)' : 'rgba(242,236,224,0.5)';
 
+  if (kind === 'none') {
+    // Deliberately still, and the same 76px footprint as the other two so the three
+    // cards line up: the glyph says "nothing moves here" by not moving.
+    return (
+      <span aria-hidden="true" className="flex h-8 w-[76px] items-center justify-center">
+        <span className="h-[2px] w-10 rounded-full" style={{ background: color }} />
+      </span>
+    );
+  }
+
   if (kind === 'bars') {
     return (
       <span aria-hidden="true" className="flex h-8 items-center gap-[3px]">

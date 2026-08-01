@@ -7,12 +7,15 @@
  * does give us is the real OS share sheet, which lists whichever of those apps are
  * installed — the user picks one and the video is handed over. Everything else falls
  * back to a plain download plus instructions.
+ *
+ * There are deliberately no per-network buttons. A web share endpoint cannot carry a
+ * video, so a Facebook or Instagram button here could only ever open a page with a
+ * link in it — which looks like posting the video and is not. The OS share sheet is
+ * the one route that really hands the MP4 to those apps, so that is the only one
+ * offered, with a download beside it.
  */
 
 export type ShareOutcome = 'shared' | 'dismissed' | 'unsupported' | 'too-large' | 'failed';
-
-/** Networks that get a dedicated button. Each one falls back to its web share page. */
-export type SocialTarget = 'facebook' | 'whatsapp' | 'telegram' | 'x' | 'linkedin';
 
 export const SHARE_TITLE = 'GLASKO';
 export const SHARE_TEXT = 'Created with GLASKO';
@@ -85,14 +88,12 @@ export function describeShareBlock(file: File): 'unsupported' | 'too-large' | nu
   return canShareVideoFiles(file.type) ? 'too-large' : 'unsupported';
 }
 
+/** `glasko-video-2026-07-31.mp4` — the local date, which is the one the user recognises. */
 export function buildFilename(extension = 'mp4'): string {
-  // Date is only used for a human-friendly filename.
-  const stamp = new Date()
-    .toISOString()
-    .replace(/[:.]/g, '-')
-    .replace('T', '-')
-    .slice(0, 19);
-  return `glasko-${stamp}.${extension}`;
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  return `glasko-video-${stamp}.${extension}`;
 }
 
 export async function shareVideoFile(file: File, text: string): Promise<ShareOutcome> {
@@ -112,55 +113,15 @@ export async function shareVideoFile(file: File, text: string): Promise<ShareOut
   }
 }
 
-/** The GLASKO address to hand to other people, without any query string. */
+/**
+ * The GLASKO address to hand to other people.
+ *
+ * Deliberately without the query string: "Copy GLASKO link" shares the app, not
+ * whatever state this particular tab happens to be in.
+ */
 export function siteUrl(): string {
   if (typeof window === 'undefined') return '';
   return `${window.location.origin}${window.location.pathname}`;
-}
-
-/** The address of the page as it is right now — what Copy link puts on the clipboard. */
-export function currentUrl(): string {
-  if (typeof window === 'undefined') return '';
-  return window.location.href;
-}
-
-/**
- * Web share endpoints.
- *
- * None of these can carry a video file: they take a link and some text, and the user
- * attaches the downloaded MP4 in the app. That is exactly what the UI tells them.
- */
-export function socialShareUrl(target: SocialTarget, url: string, text: string): string {
-  const link = encodeURIComponent(url);
-  const message = encodeURIComponent(text);
-  switch (target) {
-    case 'facebook':
-      return `https://www.facebook.com/sharer/sharer.php?u=${link}`;
-    case 'whatsapp':
-      return `https://wa.me/?text=${encodeURIComponent(`${text} ${url}`)}`;
-    case 'telegram':
-      return `https://t.me/share/url?url=${link}&text=${message}`;
-    case 'x':
-      return `https://twitter.com/intent/tweet?text=${message}&url=${link}`;
-    case 'linkedin':
-      return `https://www.linkedin.com/sharing/share-offsite/?url=${link}`;
-  }
-}
-
-/** Opens a share page in a new tab. `false` means the browser blocked the popup. */
-export function openShareWindow(url: string): boolean {
-  if (typeof window === 'undefined') return false;
-  // Deliberately no `noopener` in the feature string: with it, `window.open` always
-  // returns null and a blocked popup becomes indistinguishable from a successful one.
-  // The reference is severed straight afterwards instead.
-  const opened = window.open(url, '_blank');
-  if (!opened) return false;
-  try {
-    opened.opener = null;
-  } catch {
-    // Cross-origin restrictions can refuse this; the tab is still open.
-  }
-  return true;
 }
 
 /** Clipboard write with a fallback for browsers that gate the async clipboard API. */

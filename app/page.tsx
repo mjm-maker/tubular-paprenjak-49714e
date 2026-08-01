@@ -4,12 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AnimationPanel from '@/components/AnimationPanel';
 import BackgroundPanel from '@/components/BackgroundPanel';
 import ExportPanel, { type ExportState } from '@/components/ExportPanel';
+import FormatPanel from '@/components/FormatPanel';
 import { BrandMark, PauseIcon, PlayIcon, AlertIcon } from '@/components/Icons';
 import MusicPanel from '@/components/MusicPanel';
 import PreviewStage from '@/components/PreviewStage';
 import SharePanel from '@/components/SharePanel';
 import SiteFooter from '@/components/SiteFooter';
 import SourcePanel, { type AudioOrigin } from '@/components/SourcePanel';
+import SubtitlePanel, { type SubtitleStatus } from '@/components/SubtitlePanel';
 import {
   analyseAudio,
   createDemoAnalysis,
@@ -22,7 +24,14 @@ import {
   formatDuration,
 } from '@/lib/audio';
 import { canExportMp4, encodeVideo } from '@/lib/encode';
-import { mixAudio, musicGainAt } from '@/lib/mix';
+import { DEFAULT_FORMAT, formatById, type FormatId } from '@/lib/layout';
+import {
+  buildDuckEnvelope,
+  duckGainAt,
+  effectiveMusicLevel,
+  mixAudio,
+  musicGainAt,
+} from '@/lib/mix';
 import {
   DEFAULT_MUSIC_VOLUME,
   DEFAULT_VOICE_VOLUME,
@@ -36,20 +45,33 @@ import {
   canShareFile,
   canShareVideoFiles,
   copyText,
-  currentUrl,
   describeShareBlock,
   downloadBlob,
-  openShareWindow,
   shareVideoFile,
   siteUrl,
-  socialShareUrl,
-  type SocialTarget,
 } from '@/lib/share';
+import {
+  DEFAULT_SUBTITLE_SETTINGS,
+  languagesFor,
+  modeNeedsLanguage,
+  toSrt,
+  toVtt,
+  type SubtitleCue,
+  type SubtitleLanguage,
+  type SubtitleSettings,
+} from '@/lib/subtitles';
 import {
   DEFAULT_BACKGROUND,
   type AnimationKind,
   type BackgroundChoice,
 } from '@/lib/theme';
+import {
+  SubtitleError,
+  downloadText,
+  transcribeVoice,
+  translateCues,
+} from '@/lib/transcribe';
+import { DEFAULT_WATERMARK, watermarkFor, type WatermarkSettings } from '@/lib/watermark';
 
 interface LoadedSource {
   origin: AudioOrigin;
@@ -66,14 +88,10 @@ interface LoadedImage {
   url: string;
 }
 
-const FALLBACK_FONTS = { display: 'Georgia, serif', mono: 'monospace' };
-
-const NETWORK_LABEL: Record<SocialTarget, string> = {
-  facebook: 'Facebook',
-  whatsapp: 'WhatsApp',
-  telegram: 'Telegram',
-  x: 'X',
-  linkedin: 'LinkedIn',
+const FALLBACK_FONTS = {
+  display: 'Georgia, serif',
+  mono: 'monospace',
+  sans: 'system-ui, sans-serif',
 };
 
 /** Shown wherever the browser will not take the file, worded the same way every time. */
@@ -100,6 +118,17 @@ function resolveFontStack(variable: string, fallback: string): string {
   }
 }
 
+/** Turn a thrown subtitle error into the state the panel shows. */
+function subtitleErrorState(error: unknown): SubtitleStatus {
+  if (error instanceof SubtitleError) {
+    return { phase: 'error', message: error.message, setup: error.code === 'not-configured' };
+  }
+  return {
+    phase: 'error',
+    message: (error as Error)?.message ?? 'Subtitles could not be generated. Please try again.',
+  };
+}
+
 export default function Home() {
   const [source, setSource] = useState<LoadedSource | null>(null);
   const [decoding, setDecoding] = useState(false);
@@ -115,6 +144,16 @@ export default function Home() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [exportSupported, setExportSupported] = useState(true);
 
+  // Output shape and branding.
+  const [formatId, setFormatId] = useState<FormatId>(DEFAULT_FORMAT.id);
+  const [watermark, setWatermark] = useState<WatermarkSettings>(DEFAULT_WATERMARK);
+
+  // Subtitles. The cues are language-complete; the mode only decides what is drawn.
+  const [subtitles, setSubtitles] = useState<SubtitleSettings>(DEFAULT_SUBTITLE_SETTINGS);
+  const [cues, setCues] = useState<SubtitleCue[]>([]);
+  const [detected, setDetected] = useState<SubtitleLanguage | null>(null);
+  const [subtitleStatus, setSubtitleStatus] = useState<SubtitleStatus>({ phase: 'idle' });
+
   // Background music. The page owns the audition state as well as the selection,
   // so that starting the main preview can stop a track that is being auditioned.
   const [music, setMusic] = useState<SelectedMusic | null>(null);
@@ -128,6 +167,7 @@ export default function Home() {
   const musicRef = useRef<HTMLAudioElement>(null);
   const auditionRef = useRef<HTMLAudioElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const subtitleAbortRef = useRef<AbortController | null>(null);
   const demoAnalysis = useMemo(() => createDemoAnalysis(), []);
 
   // Resolve the real font family names once the webfonts have loaded, so canvas
@@ -139,6 +179,8 @@ export default function Home() {
       setFonts({
         display: resolveFontStack('--font-display', FALLBACK_FONTS.display),
         mono: resolveFontStack('--font-mono', FALLBACK_FONTS.mono),
+        // Subtitles and the watermark: the one stack with Cyrillic in it.
+        sans: resolveFontStack('--font-caption', FALLBACK_FONTS.sans),
       });
     };
     resolve();
@@ -173,14 +215,33 @@ export default function Home() {
     };
   }, [music]);
 
+  const format = useMemo(() => formatById(formatId), [formatId]);
+
+  /**
+   * Sidechain envelope for the music bed, measured from the voice.
+   *
+   * Built once here and handed to both the live preview and `mixAudio`, so what you
+   * hear in the tab and what lands in the file are the same curve rather than two
+   * implementations of it.
+   */
+  const duck = useMemo(
+    () => (source && music ? buildDuckEnvelope(source.buffer) : null),
+    [music, source],
+  );
+
   const spec = useMemo<RenderSpec>(
     () => ({
+      format,
       background,
       backgroundImage: background.kind === 'image' ? image?.element ?? null : null,
       animation,
       fonts,
+      subtitles:
+        subtitles.mode !== 'none' && cues.length > 0 ? { cues, settings: subtitles } : null,
+      // `watermarkFor` is the single place a GLASKO PRO account would switch this off.
+      watermark: watermarkFor(watermark),
     }),
-    [animation, background, fonts, image],
+    [animation, background, cues, fonts, format, image, subtitles, watermark],
   );
 
   const pausePreview = useCallback(() => {
@@ -192,6 +253,13 @@ export default function Home() {
   const stopAudition = useCallback(() => {
     auditionRef.current?.pause();
     setAuditionId(null);
+  }, []);
+
+  const clearSubtitles = useCallback(() => {
+    subtitleAbortRef.current?.abort();
+    setCues([]);
+    setDetected(null);
+    setSubtitleStatus({ phase: 'idle' });
   }, []);
 
   const handleAudio = useCallback(
@@ -224,6 +292,8 @@ export default function Home() {
           buffer,
           analysis,
         });
+        // A transcript belongs to one recording. A new one invalidates it.
+        clearSubtitles();
 
         if (buffer.duration > LONG_DURATION_SECONDS) {
           setNotice(
@@ -236,7 +306,7 @@ export default function Home() {
         setDecoding(false);
       }
     },
-    [pausePreview],
+    [clearSubtitles, pausePreview],
   );
 
   const handleClear = useCallback(() => {
@@ -244,7 +314,8 @@ export default function Home() {
     setSource(null);
     setExportState({ phase: 'idle' });
     setNotice(null);
-  }, [pausePreview]);
+    clearSubtitles();
+  }, [clearSubtitles, pausePreview]);
 
   const handleImage = useCallback(async (file: File) => {
     const url = URL.createObjectURL(file);
@@ -370,7 +441,8 @@ export default function Home() {
   }, [source, voiceVolume]);
 
   // Music under the preview. The volume is recomputed from the voice's playback
-  // position so the fade matches the curve `mixAudio` bakes into the export.
+  // position through the same three functions the export bakes in: the headroom cap,
+  // the fade envelope and the ducking curve.
   useEffect(() => {
     const element = musicRef.current;
     if (!element) return;
@@ -379,9 +451,11 @@ export default function Home() {
       return;
     }
     const duration = source.analysis.duration;
+    const level = effectiveMusicLevel(musicVolume, voiceVolume);
     const apply = () => {
       const elapsed = audioRef.current?.currentTime ?? 0;
-      element.volume = Math.min(1, Math.max(0, musicVolume * musicGainAt(elapsed, duration)));
+      const gain = level * musicGainAt(elapsed, duration) * duckGainAt(duck, elapsed);
+      element.volume = Math.min(1, Math.max(0, gain));
     };
     apply();
     element.play().catch(() => undefined);
@@ -389,7 +463,7 @@ export default function Home() {
     // running when the tab is hidden — which is where the audio keeps playing.
     const timer = window.setInterval(apply, 50);
     return () => window.clearInterval(timer);
-  }, [music, musicVolume, playing, source]);
+  }, [duck, music, musicVolume, playing, source, voiceVolume]);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
@@ -421,6 +495,147 @@ export default function Home() {
       .catch(() => setNotice('Playback was blocked. Tap the play button again.'));
   }, [music, playing, source, stopAudition]);
 
+  /* ---------------------------------------------------------------- subtitles */
+
+  /**
+   * Transcribe, then translate if the chosen mode needs a second language.
+   *
+   * Shared by the Subtitles panel and the export, so a video generated with a mode
+   * selected but nothing transcribed yet still comes out with subtitles on it.
+   */
+  const buildSubtitles = useCallback(
+    async (
+      voice: AudioBuffer,
+      analysis: AudioAnalysis,
+      mode: SubtitleSettings['mode'],
+      signal: AbortSignal,
+      report: (detail: string, ratio: number) => void,
+    ): Promise<SubtitleCue[]> => {
+      const result = await transcribeVoice({
+        voice,
+        analysis,
+        signal,
+        onProgress: ({ detail, ratio, stage }) =>
+          report(detail, stage === 'prepare' ? ratio * 0.08 : 0.08 + ratio * 0.62),
+      });
+      setDetected(result.language);
+
+      const missing = languagesFor(mode).find((language) => language !== result.language);
+      if (!missing) {
+        setCues(result.cues);
+        return result.cues;
+      }
+
+      const translated = await translateCues({
+        cues: result.cues,
+        from: result.language,
+        to: missing,
+        signal,
+        onProgress: ({ detail, ratio }) => report(detail, 0.7 + ratio * 0.3),
+      });
+      setCues(translated);
+      return translated;
+    },
+    [],
+  );
+
+  const generateSubtitles = useCallback(async () => {
+    if (!source) return;
+    subtitleAbortRef.current?.abort();
+    const controller = new AbortController();
+    subtitleAbortRef.current = controller;
+    setSubtitleStatus({ phase: 'working', detail: 'Preparing audio', ratio: 0.02 });
+    try {
+      await buildSubtitles(
+        source.buffer,
+        source.analysis,
+        subtitles.mode,
+        controller.signal,
+        (detail, ratio) => setSubtitleStatus({ phase: 'working', detail, ratio }),
+      );
+      setSubtitleStatus({ phase: 'ready' });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        setSubtitleStatus({ phase: 'idle' });
+        return;
+      }
+      setSubtitleStatus(subtitleErrorState(error));
+    } finally {
+      if (subtitleAbortRef.current === controller) subtitleAbortRef.current = null;
+    }
+  }, [buildSubtitles, source, subtitles.mode]);
+
+  /** Fill in a second language for cues that already exist. */
+  const fillLanguage = useCallback(
+    async (target: SubtitleLanguage, current: SubtitleCue[]) => {
+      if (!detected || target === detected || current.length === 0) return;
+      subtitleAbortRef.current?.abort();
+      const controller = new AbortController();
+      subtitleAbortRef.current = controller;
+      setSubtitleStatus({ phase: 'working', detail: 'Translating subtitles', ratio: 0.05 });
+      try {
+        const translated = await translateCues({
+          cues: current,
+          from: detected,
+          to: target,
+          signal: controller.signal,
+          onProgress: ({ detail, ratio }) =>
+            setSubtitleStatus({ phase: 'working', detail, ratio: Math.max(0.05, ratio) }),
+        });
+        setCues(translated);
+        setSubtitleStatus({ phase: 'ready' });
+      } catch (error) {
+        if (controller.signal.aborted) {
+          setSubtitleStatus({ phase: 'idle' });
+          return;
+        }
+        setSubtitleStatus(subtitleErrorState(error));
+      } finally {
+        if (subtitleAbortRef.current === controller) subtitleAbortRef.current = null;
+      }
+    },
+    [detected],
+  );
+
+  /**
+   * Settings changes are free except one: switching to a mode that needs a language
+   * the cues do not carry yet. That one triggers a translation rather than silently
+   * drawing blanks.
+   */
+  const applySubtitleSettings = useCallback(
+    (next: SubtitleSettings) => {
+      setSubtitles(next);
+      if (cues.length === 0 || subtitleStatus.phase === 'working') return;
+      const missing = languagesFor(next.mode).find((language) =>
+        modeNeedsLanguage(cues, language),
+      );
+      if (missing) void fillLanguage(missing, cues);
+    },
+    [cues, fillLanguage, subtitleStatus.phase],
+  );
+
+  const cancelSubtitles = useCallback(() => subtitleAbortRef.current?.abort(), []);
+
+  const editCue = useCallback((id: string, language: SubtitleLanguage, text: string) => {
+    setCues((previous) =>
+      previous.map((cue) => (cue.id === id ? ({ ...cue, [language]: text } as SubtitleCue) : cue)),
+    );
+  }, []);
+
+  const downloadSubtitles = useCallback(
+    (kind: 'srt' | 'vtt') => {
+      if (cues.length === 0) return;
+      // Subtitles switched off still have a transcript worth downloading, so fall
+      // back to whichever language was actually spoken rather than to an empty file.
+      const mode = subtitles.mode === 'none' ? detected ?? 'bg' : subtitles.mode;
+      const text = kind === 'srt' ? toSrt(cues, mode) : toVtt(cues, mode);
+      downloadText(text, buildFilename(kind), kind === 'srt' ? 'text/plain' : 'text/vtt');
+    },
+    [cues, detected, subtitles.mode],
+  );
+
+  /* ------------------------------------------------------------------- export */
+
   const generate = useCallback(async () => {
     if (!source) return;
     pausePreview();
@@ -428,14 +643,80 @@ export default function Home() {
 
     const controller = new AbortController();
     abortRef.current = controller;
+
+    // Subtitles are generated here when the mode asks for them and there is no
+    // transcript yet, so the file always matches what the panel says it will be.
+    const needsTranscript = subtitles.mode !== 'none' && cues.length === 0;
+    const missingLanguage =
+      subtitles.mode !== 'none' && cues.length > 0
+        ? languagesFor(subtitles.mode).find((language) => modeNeedsLanguage(cues, language))
+        : undefined;
+
     setExportState({
       phase: 'working',
       stage: 'render',
       ratio: 0,
-      detail: music ? 'Mixing voice and music' : 'Preparing the encoder',
+      label: needsTranscript ? 'Generating subtitles' : 'Preparing audio',
+      detail: needsTranscript ? 'Listening to your voice' : music ? 'Mixing voice and music' : 'Reading the recording',
     });
 
     try {
+      let exportCues = cues;
+
+      if (needsTranscript) {
+        exportCues = await buildSubtitles(
+          source.buffer,
+          source.analysis,
+          subtitles.mode,
+          controller.signal,
+          (detail, ratio) => {
+            const label = detail.startsWith('Translating')
+              ? 'Translating subtitles'
+              : 'Generating subtitles';
+            setSubtitleStatus({ phase: 'working', detail, ratio });
+            // Transcription is the first fifth of the whole export.
+            setExportState({ phase: 'working', stage: 'render', ratio: ratio * 0.2, detail, label });
+          },
+        );
+        setSubtitleStatus({ phase: 'ready' });
+      } else if (missingLanguage && detected) {
+        setExportState({
+          phase: 'working',
+          stage: 'render',
+          ratio: 0.05,
+          label: 'Translating subtitles',
+          detail: 'Translating subtitles',
+        });
+        exportCues = await translateCues({
+          cues,
+          from: detected,
+          to: missingLanguage,
+          signal: controller.signal,
+          onProgress: ({ detail, ratio }) => {
+            setSubtitleStatus({ phase: 'working', detail, ratio });
+            setExportState({
+              phase: 'working',
+              stage: 'render',
+              ratio: ratio * 0.2,
+              detail,
+              label: 'Translating subtitles',
+            });
+          },
+        });
+        setCues(exportCues);
+        setSubtitleStatus({ phase: 'ready' });
+      }
+
+      const base = needsTranscript || missingLanguage ? 0.2 : 0;
+
+      setExportState({
+        phase: 'working',
+        stage: 'render',
+        ratio: base,
+        label: 'Preparing audio',
+        detail: music ? 'Mixing voice and music' : 'Reading the recording',
+      });
+
       // The mix is flattened to a single buffer here, so all three encode
       // pipelines stay identical whether or not there is background music.
       const audioBuffer = await mixAudio({
@@ -443,22 +724,38 @@ export default function Home() {
         music: music?.buffer ?? null,
         voiceVolume,
         musicVolume,
+        duck,
       });
+
       const result = await encodeVideo({
         audioBuffer,
         analysis: source.analysis,
-        spec,
+        // Built here rather than read from `spec`, because the cues may have been
+        // produced a few lines ago and React state has not caught up yet.
+        spec: {
+          ...spec,
+          subtitles:
+            subtitles.mode !== 'none' && exportCues.length > 0
+              ? { cues: exportCues, settings: subtitles }
+              : null,
+        },
         signal: controller.signal,
         onProgress: ({ stage, ratio, detail }) =>
-          setExportState({ phase: 'working', stage, ratio, detail }),
+          setExportState({
+            phase: 'working',
+            stage,
+            ratio: base + ratio * (1 - base),
+            detail,
+          }),
       });
+
       setExportState({
         phase: 'done',
         result,
         filename: buildFilename(result.mimeType.includes('mp4') ? 'mp4' : 'webm'),
       });
     } catch (error) {
-      if ((error as Error)?.name === 'AbortError') {
+      if ((error as Error)?.name === 'AbortError' || controller.signal.aborted) {
         setExportState({ phase: 'idle' });
         return;
       }
@@ -469,7 +766,19 @@ export default function Home() {
     } finally {
       abortRef.current = null;
     }
-  }, [music, musicVolume, pausePreview, source, spec, voiceVolume]);
+  }, [
+    buildSubtitles,
+    cues,
+    detected,
+    duck,
+    music,
+    musicVolume,
+    pausePreview,
+    source,
+    spec,
+    subtitles,
+    voiceVolume,
+  ]);
 
   const cancel = useCallback(() => abortRef.current?.abort(), []);
 
@@ -518,6 +827,12 @@ export default function Home() {
     }
   }, [saveVideo]);
 
+  /**
+   * Hand the real file to the OS share sheet.
+   *
+   * Where the browser cannot take a file, the video is saved instead and the message
+   * says so — nothing here claims to have posted anything anywhere.
+   */
   const share = useCallback(async () => {
     if (!videoFile) {
       setShareNotice('There is no video yet. Generate one first.');
@@ -529,8 +844,12 @@ export default function Home() {
       return;
     }
     if (blocked === 'unsupported') {
-      setShareNotice(DOWNLOAD_INSTEAD);
       setShareSupported(false);
+      if (saveVideo()) {
+        setShareNotice(
+          'This browser cannot pass a file to another app, so the MP4 was downloaded instead. Upload it from there.',
+        );
+      }
       return;
     }
 
@@ -546,68 +865,19 @@ export default function Home() {
         setShareNotice(`This video is too large for your browser to share directly. ${DOWNLOAD_INSTEAD}`);
         break;
       case 'unsupported':
-        setShareNotice(DOWNLOAD_INSTEAD);
         setShareSupported(false);
+        setShareNotice(DOWNLOAD_INSTEAD);
         break;
       case 'failed':
         setShareNotice(`Sharing failed. ${DOWNLOAD_INSTEAD}`);
         break;
     }
-  }, [videoFile]);
-
-  /**
-   * Per-network share.
-   *
-   * The file goes to the network's own app through the OS share sheet wherever that is
-   * possible. Where it is not — desktop, mostly — the MP4 is saved and the network's web
-   * share page opens with a link to GLASKO, because no web share endpoint accepts a video
-   * upload. The message says so; nothing here pretends the video was posted.
-   *
-   * `canShareFile` is checked synchronously before any `await`, so the `window.open` on
-   * the fallback path still counts as coming from the click.
-   */
-  const shareTo = useCallback(
-    async (target: SocialTarget) => {
-      const label = NETWORK_LABEL[target];
-      if (!videoFile) {
-        setShareNotice('There is no video yet. Generate one first.');
-        return;
-      }
-
-      if (canShareFile(videoFile)) {
-        const outcome = await shareVideoFile(videoFile, SHARE_TEXT);
-        if (outcome === 'shared') {
-          setShareNotice(`Handed the MP4 to your share sheet — pick ${label} there.`);
-          return;
-        }
-        if (outcome === 'dismissed') {
-          setShareNotice('Share cancelled.');
-          return;
-        }
-        // Anything else falls through to the link route below.
-      }
-
-      const saved = saveVideo();
-      const opened = openShareWindow(socialShareUrl(target, siteUrl(), SHARE_TEXT));
-      if (!opened) {
-        setShareNotice(
-          `Your browser blocked the ${label} window. Allow pop-ups for this site, or open ${label} yourself and attach the downloaded MP4.`,
-        );
-        return;
-      }
-      setShareNotice(
-        saved
-          ? `${label} opened with a link to GLASKO. It cannot receive a video from a web page, so attach the MP4 that just downloaded.`
-          : `${label} opened with a link to GLASKO. Use Download MP4, then attach the file there yourself.`,
-      );
-    },
-    [saveVideo, videoFile],
-  );
+  }, [saveVideo, videoFile]);
 
   const copyLink = useCallback(async () => {
-    const copied = await copyText(currentUrl());
+    const copied = await copyText(siteUrl());
     setShareNotice(
-      copied ? 'Link copied.' : 'The clipboard is blocked in this browser. Copy the address bar instead.',
+      copied ? 'GLASKO link copied.' : 'The clipboard is blocked in this browser. Copy the address bar instead.',
     );
   }, []);
 
@@ -634,9 +904,9 @@ export default function Home() {
           social video.
         </h1>
         <p className="mt-5 max-w-md text-[0.95rem] leading-relaxed text-ash">
-          Record or upload a voice message, pick a backdrop, a waveform and a music bed, and export
-          a vertical MP4 built for TikTok, Reels and Shorts. Everything runs in this browser tab —
-          the audio never leaves your device.
+          Record or upload a voice message, pick a backdrop, a waveform, a music bed and
+          subtitles, and export an MP4 built for TikTok, Reels, Shorts and the feed. The video is
+          rendered in this browser tab — audio only leaves your device if you ask for subtitles.
         </p>
       </header>
 
@@ -705,6 +975,26 @@ export default function Home() {
             onMusicVolume={setMusicVolume}
             onError={setNotice}
           />
+          <SubtitlePanel
+            settings={subtitles}
+            cues={cues}
+            detected={detected}
+            status={subtitleStatus}
+            ready={Boolean(source) && !decoding}
+            duration={source?.analysis.duration ?? 0}
+            onSettings={applySubtitleSettings}
+            onGenerate={generateSubtitles}
+            onCancel={cancelSubtitles}
+            onEditCue={editCue}
+            onClear={clearSubtitles}
+            onDownload={downloadSubtitles}
+          />
+          <FormatPanel
+            format={format}
+            watermark={watermark}
+            onFormat={setFormatId}
+            onWatermark={setWatermark}
+          />
         </div>
 
         <aside className="order-2 mt-10 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:mt-0 lg:sticky lg:top-14 lg:self-start">
@@ -745,6 +1035,7 @@ export default function Home() {
           <ExportPanel
             ready={Boolean(source) && !decoding}
             duration={source?.analysis.duration ?? 0}
+            format={format}
             state={exportState}
             onGenerate={generate}
             onCancel={cancel}
@@ -755,10 +1046,10 @@ export default function Home() {
               videoUrl={videoUrl}
               sizeBytes={exportState.result.blob.size}
               filename={exportState.filename}
+              format={format}
               fileSharingSupported={fileSharingSupported}
               notice={shareNotice}
               onShare={share}
-              onSocial={shareTo}
               onCopyLink={copyLink}
               onDownload={download}
             />

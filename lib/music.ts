@@ -28,7 +28,7 @@ export interface MusicTrack {
   id: string;
   title: string;
   category: MusicCategory;
-  /** Path under `public/`, e.g. `/music/soft-morning.mp3`. */
+  /** Path under `public/`, e.g. `/music/steady-hand.mp3`. */
   src: string;
   duration: number;
   artist: string;

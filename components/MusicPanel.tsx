@@ -17,6 +17,7 @@ import { MUSIC_FADE_SECONDS } from '@/lib/mix';
 import {
   CheckIcon,
   MusicIcon,
+  MuteIcon,
   PauseIcon,
   PlayIcon,
   SpinnerIcon,
@@ -228,8 +229,37 @@ export default function MusicPanel({
         })}
       </div>
 
-      {/* Track cards */}
+      {/* Track cards. "No music" is a card of its own rather than only a remove
+          button, so leaving music out is an explicit choice you can see is active. */}
       <ul className="grid gap-2.5 sm:grid-cols-2" role="list">
+        <li>
+          <div
+            className="flex h-full items-center gap-3 border px-3.5 py-3 transition-colors"
+            style={{
+              borderColor: selected ? 'rgba(242,236,224,0.12)' : 'var(--color-ember)',
+              background: selected ? 'rgba(242,236,224,0.02)' : 'rgba(240,135,60,0.07)',
+            }}
+          >
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-bone/15 text-ash">
+              <MuteIcon className="h-4 w-4" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm text-bone">No music</p>
+              <p className="label-mono mt-1 normal-case tracking-normal">Voice only</p>
+            </div>
+            <button
+              type="button"
+              onClick={onRemove}
+              disabled={!selected}
+              className="chip shrink-0 !px-3 !py-2 disabled:opacity-100"
+              style={selected ? undefined : { borderColor: 'var(--color-ember)', color: 'var(--color-ember)' }}
+              aria-label={selected ? 'Export with no background music' : 'No music selected'}
+            >
+              {selected ? 'Select' : <CheckIcon className="h-3.5 w-3.5" />}
+            </button>
+          </div>
+        </li>
+
         {tracks.map((track) => {
           const isSelected = selected?.id === track.id;
           const isAuditioning = auditionId === track.id;

@@ -253,6 +253,24 @@ function lowpass(buf, cutoff) {
 }
 
 /**
+ * Gentle scoop through the speech band, in place.
+ *
+ * The one thing a music bed must not do is compete with the voice on top of it.
+ * Speech lives roughly between 350 Hz and 3.5 kHz, so a broad, shallow dip there
+ * leaves the bed's weight (its bass) and its air (its highs) intact while getting
+ * out of the way of the words. Built from two passes of the loop-aware one-pole
+ * above rather than a biquad, so it stays seamless at the loop point and stays
+ * shallow enough that nothing sounds filtered.
+ */
+function duckMids(buf, low = 380, high = 3400, amount = 0.55) {
+  const upper = Float32Array.from(buf);
+  lowpass(upper, high);
+  const lower = Float32Array.from(buf);
+  lowpass(lower, low);
+  for (let i = 0; i < buf.length; i++) buf[i] -= amount * (upper[i] - lower[i]);
+}
+
+/**
  * Feedback delay whose taps wrap around the end of the loop. This is what makes
  * the loop point inaudible: the tail of the last bar is already present at the
  * start of the first.
@@ -319,326 +337,232 @@ function grid(bpm, bars, seed) {
 
 const TRACKS = [
   {
-    id: 'calm-01',
-    title: 'Soft Morning',
-    category: 'Calm',
-    file: 'soft-morning.mp3',
-    mood: 'Weightless piano-pad haze, no percussion',
+    id: 'cinematic-03',
+    title: 'Northern Light',
+    category: 'Cinematic',
+    file: 'northern-light.mp3',
+    mood: 'Warm arpeggio over a wide pad — open and hopeful',
     build() {
-      const { buf, bar, rng } = grid(68, 8, 11);
+      const { buf, beat, bar, rng } = grid(64, 8, 211);
+      // Cmaj7 - Em7 - Am7 - Fmaj7: the modern, unresolved four that most
+      // cinematic beds are built on, voiced low so speech sits above it.
       const progression = [
         ['C3', 'E3', 'G3', 'B3'],
+        ['E3', 'G3', 'B3', 'D4'],
         ['A2', 'C3', 'E3', 'G3'],
         ['F2', 'A2', 'C3', 'E3'],
-        ['G2', 'B2', 'D3', 'F3'],
-      ];
-      for (let i = 0; i < 8; i++) {
-        const voicing = progression[Math.floor(i / 2) % 4];
-        const t = i * bar;
-        chord(buf, voicing, {
-          t0: t, dur: bar * 0.94, gain: 0.09, kind: 'reed',
-          a: 1.15, d: 0.9, s: 0.72, r: 1.5, detune: 0.0016,
-        });
-        note(buf, { f: hz(voicing[0]) / 2, t0: t, dur: bar * 0.9, gain: 0.15, kind: 'sine', a: 0.5, d: 0.6, s: 0.6, r: 1.2 });
-      }
-      // Sparse bell figure, drifting so the loop never feels metronomic.
-      const bells = ['G4', 'E4', 'C5', 'B4', 'G4', 'A4', 'E5', 'C5'];
-      for (let i = 0; i < bells.length; i++) {
-        const t = i * bar + (i % 3) * 0.62 + rng() * 0.1;
-        note(buf, { f: hz(bells[i]), t0: t, dur: 0.16, gain: 0.075, kind: 'sine', a: 0.006, d: 0.5, s: 0.16, r: 1.5 });
-      }
-      lowpass(buf, 5200);
-      return wrapDelay(buf, 0.52, 0.42, 0.5);
-    },
-  },
-  {
-    id: 'calm-02',
-    title: 'Still Water',
-    category: 'Calm',
-    file: 'still-water.mp3',
-    mood: 'Slow swelling pads over a low drone',
-    build() {
-      const { buf, bar } = grid(60, 6, 23);
-      const swells = [
-        ['D3', 'F3', 'A3'],
-        ['Bb2', 'D3', 'F3'],
-        ['G2', 'Bb2', 'D3'],
-        ['A2', 'C3', 'E3'],
-        ['D3', 'F3', 'A3'],
-        ['C3', 'E3', 'G3'],
-      ];
-      for (let i = 0; i < 6; i++) {
-        chord(buf, swells[i], {
-          t0: i * bar, dur: bar * 0.9, gain: 0.085, kind: 'reed',
-          a: 1.7, d: 1.1, s: 0.66, r: 2.1, detune: 0.002, vib: 0.02, vibRate: 0.4,
-        });
-      }
-      note(buf, { f: hz('D1'), t0: 0, dur: bar * 6 - 0.2, gain: 0.2, kind: 'sine', a: 2.2, d: 1, s: 0.85, r: 2.4 });
-      note(buf, { f: hz('A1'), t0: bar * 2, dur: bar * 4 - 0.2, gain: 0.1, kind: 'sine', a: 2.4, d: 1, s: 0.8, r: 2.4 });
-      lowpass(buf, 3400);
-      return wrapDelay(buf, 0.75, 0.5, 0.55);
-    },
-  },
-  {
-    id: 'inspirational-01',
-    title: 'First Light',
-    category: 'Inspirational',
-    file: 'first-light.mp3',
-    mood: 'Rising arpeggio, soft kick, wide pad',
-    build() {
-      const { buf, beat, bar, rng } = grid(92, 8, 31);
-      const progression = [
-        { pad: ['C3', 'E3', 'G3'], arp: ['C4', 'E4', 'G4', 'B4'] },
-        { pad: ['G2', 'B2', 'D3'], arp: ['G3', 'B3', 'D4', 'G4'] },
-        { pad: ['A2', 'C3', 'E3'], arp: ['A3', 'C4', 'E4', 'A4'] },
-        { pad: ['F2', 'A2', 'C3'], arp: ['F3', 'A3', 'C4', 'F4'] },
-      ];
-      for (let i = 0; i < 8; i++) {
-        const step = progression[i % 4];
-        const t = i * bar;
-        chord(buf, step.pad, { t0: t, dur: bar * 0.95, gain: 0.075, kind: 'reed', a: 0.5, d: 0.5, s: 0.75, r: 0.8, detune: 0.0018 });
-        note(buf, { f: hz(step.pad[0]) / 2, t0: t, dur: beat * 3.4, gain: 0.17, kind: 'tri', a: 0.02, d: 0.35, s: 0.5, r: 0.5 });
-        // Eighth-note arpeggio, gently accented on the downbeat of each pair.
-        for (let e = 0; e < 8; e++) {
-          const pitch = step.arp[e % step.arp.length];
-          const up = e < 4 ? 1 : 2;
-          note(buf, {
-            f: hz(pitch) * (up === 2 && e % 2 === 1 ? 2 : 1),
-            t0: t + e * (beat / 2),
-            dur: 0.1,
-            gain: 0.062 * (e % 2 === 0 ? 1 : 0.7),
-            kind: 'warm', a: 0.004, d: 0.22, s: 0.12, r: 0.4,
-          });
-        }
-        kick(buf, t, 0.5);
-        kick(buf, t + beat * 2, 0.42);
-        for (let h = 0; h < 4; h++) noiseHit(buf, t + beat * h + beat / 2, 0.05, 0.032, rng, 0.85);
-      }
-      lowpass(buf, 8200);
-      return wrapDelay(buf, beat / 2, 0.3, 0.28);
-    },
-  },
-  {
-    id: 'inspirational-02',
-    title: 'Open Road',
-    category: 'Inspirational',
-    file: 'open-road.mp3',
-    mood: 'Anthemic chord plucks with a steady pulse',
-    build() {
-      const { buf, beat, bar, rng } = grid(100, 8, 47);
-      const progression = [
-        ['D3', 'F#3', 'A3'],
-        ['A2', 'C#3', 'E3'],
-        ['B2', 'D3', 'F#3'],
-        ['G2', 'B2', 'D3'],
       ];
       for (let i = 0; i < 8; i++) {
         const voicing = progression[i % 4];
         const t = i * bar;
-        // Four plucked chord hits per bar, softening across the bar.
-        for (let b = 0; b < 4; b++) {
-          chord(buf, voicing, {
-            t0: t + b * beat, dur: 0.2, gain: 0.055 * (b === 0 ? 1.25 : 0.85),
-            kind: 'tri', a: 0.005, d: 0.3, s: 0.15, r: 0.55,
-          });
-        }
-        note(buf, { f: hz(voicing[0]) / 2, t0: t, dur: beat * 1.6, gain: 0.19, kind: 'tri', a: 0.015, d: 0.3, s: 0.55, r: 0.4 });
-        note(buf, { f: hz(voicing[0]) / 2, t0: t + beat * 2, dur: beat * 1.6, gain: 0.15, kind: 'tri', a: 0.015, d: 0.3, s: 0.5, r: 0.4 });
-        chord(buf, voicing.map((n) => n.replace(/\d/, (d) => String(Number(d) + 1))), {
-          t0: t, dur: bar * 0.92, gain: 0.045, kind: 'reed', a: 0.6, d: 0.6, s: 0.7, r: 0.9, detune: 0.002,
-        });
-        for (let b = 0; b < 4; b++) {
-          kick(buf, t + b * beat, b % 2 === 0 ? 0.5 : 0.34);
-          noiseHit(buf, t + b * beat + beat / 2, 0.055, 0.035, rng, 0.86);
-        }
-      }
-      lowpass(buf, 7600);
-      return wrapDelay(buf, beat * 0.75, 0.26, 0.24);
-    },
-  },
-  {
-    id: 'cinematic-01',
-    title: 'Wide Horizon',
-    category: 'Cinematic',
-    file: 'wide-horizon.mp3',
-    mood: 'Minor pad swells, low drone, distant hits',
-    build() {
-      const { buf, bar } = grid(76, 8, 59);
-      const progression = [
-        ['A2', 'C3', 'E3'],
-        ['F2', 'A2', 'C3'],
-        ['C3', 'E3', 'G3'],
-        ['G2', 'B2', 'D3'],
-      ];
-      for (let i = 0; i < 8; i++) {
-        const voicing = progression[Math.floor(i / 2) % 4];
-        const t = i * bar;
         chord(buf, voicing, {
-          t0: t, dur: bar * 0.95, gain: 0.08, kind: 'reed',
-          a: 1.4, d: 0.9, s: 0.7, r: 1.6, detune: 0.0022, vib: 0.03, vibRate: 0.3,
+          t0: t, dur: bar * 0.96, gain: 0.062, kind: 'reed',
+          a: 1.3, d: 1.0, s: 0.7, r: 1.8, detune: 0.0018,
         });
-        // High shimmer an octave and a fifth up, very quiet.
-        note(buf, { f: hz(voicing[2]) * 3, t0: t, dur: bar * 0.8, gain: 0.022, kind: 'sine', a: 1.6, d: 0.8, s: 0.6, r: 1.8 });
-      }
-      note(buf, { f: hz('A1'), t0: 0, dur: bar * 8 - 0.2, gain: 0.22, kind: 'sine', a: 2, d: 1.2, s: 0.85, r: 2.2 });
-      boom(buf, 0, 0.62);
-      boom(buf, bar * 4, 0.5);
-      boom(buf, bar * 6, 0.34);
-      lowpass(buf, 4200);
-      return wrapDelay(buf, 0.66, 0.48, 0.5);
-    },
-  },
-  {
-    id: 'cinematic-02',
-    title: 'Slow Reveal',
-    category: 'Cinematic',
-    file: 'slow-reveal.mp3',
-    mood: 'Suspended chords opening up across eight bars',
-    build() {
-      const { buf, bar } = grid(80, 8, 71);
-      const progression = [
-        ['D3', 'E3', 'A3'],
-        ['F3', 'G3', 'C4'],
-        ['G2', 'C3', 'D3'],
-        ['A2', 'D3', 'E3'],
-      ];
-      for (let i = 0; i < 8; i++) {
-        const voicing = progression[i % 4];
-        const t = i * bar;
-        // Gain climbs over the loop so the last bars feel like a lift, then the
-        // wrap-around delay carries it back into bar one.
-        const lift = 0.06 + (i / 7) * 0.045;
-        chord(buf, voicing, {
-          t0: t, dur: bar * 0.96, gain: lift, kind: 'reed',
-          a: 1.1, d: 0.8, s: 0.74, r: 1.4, detune: 0.0024,
+        // Sub root an octave down: the weight that makes it feel like a score.
+        note(buf, {
+          f: hz(voicing[0]) / 2, t0: t, dur: bar * 0.92, gain: 0.17,
+          kind: 'sine', a: 0.6, d: 0.7, s: 0.62, r: 1.4,
         });
-        note(buf, { f: hz(voicing[0]) / 2, t0: t, dur: bar * 0.9, gain: 0.17, kind: 'sine', a: 0.7, d: 0.6, s: 0.7, r: 1.2 });
-      }
-      boom(buf, 0, 0.55);
-      boom(buf, bar * 4, 0.62);
-      lowpass(buf, 5000);
-      return wrapDelay(buf, 0.58, 0.44, 0.46);
-    },
-  },
-  {
-    id: 'energetic-01',
-    title: 'Pulse Line',
-    category: 'Energetic',
-    file: 'pulse-line.mp3',
-    mood: 'Four-on-the-floor with a pumping bass and stabs',
-    build() {
-      const { buf, beat, bar, rng } = grid(124, 8, 83);
-      const roots = ['F2', 'F2', 'Db2', 'Ab2'];
-      const stabs = [
-        ['Ab3', 'C4', 'F4'],
-        ['Ab3', 'C4', 'F4'],
-        ['Ab3', 'Db4', 'F4'],
-        ['Ab3', 'C4', 'Eb4'],
-      ];
-      for (let i = 0; i < 8; i++) {
-        const t = i * bar;
-        const root = roots[i % 4];
-        const voicing = stabs[i % 4];
+        // Eighth-note arpeggio, alternating up and down so it never marches.
         for (let e = 0; e < 8; e++) {
-          note(buf, {
-            f: hz(root) * (e === 6 ? 2 : 1),
-            t0: t + e * (beat / 2),
-            dur: beat * 0.28,
-            gain: 0.16,
-            kind: 'saw', a: 0.004, d: 0.09, s: 0.42, r: 0.1,
-          });
-        }
-        chord(buf, voicing, { t0: t + beat * 1.5, dur: 0.13, gain: 0.05, kind: 'saw', a: 0.004, d: 0.16, s: 0.1, r: 0.24 });
-        chord(buf, voicing, { t0: t + beat * 3.25, dur: 0.11, gain: 0.042, kind: 'saw', a: 0.004, d: 0.14, s: 0.1, r: 0.22 });
-        for (let b = 0; b < 4; b++) {
-          kick(buf, t + b * beat, 0.7);
-          noiseHit(buf, t + b * beat + beat / 2, 0.075, b === 3 ? 0.09 : 0.03, rng, 0.9);
-        }
-        clap(buf, t + beat, 0.075, rng);
-        clap(buf, t + beat * 3, 0.075, rng);
-      }
-      lowpass(buf, 9000);
-      return wrapDelay(buf, beat * 0.75, 0.22, 0.2);
-    },
-  },
-  {
-    id: 'energetic-02',
-    title: 'Neon Run',
-    category: 'Energetic',
-    file: 'neon-run.mp3',
-    mood: 'Driving sixteenth-note arpeggio',
-    build() {
-      const { buf, beat, bar, rng } = grid(128, 8, 97);
-      const shapes = [
-        ['A3', 'C4', 'E4', 'A4'],
-        ['G3', 'B3', 'D4', 'G4'],
-        ['F3', 'A3', 'C4', 'F4'],
-        ['E3', 'G3', 'B3', 'E4'],
-      ];
-      for (let i = 0; i < 8; i++) {
-        const t = i * bar;
-        const shape = shapes[i % 4];
-        for (let s = 0; s < 16; s++) {
-          const pitch = shape[s % 4];
-          const octave = s % 8 >= 4 ? 2 : 1;
+          const step = i % 2 === 0 ? e : 7 - e;
+          const pitch = voicing[step % voicing.length];
+          const octave = step >= 4 ? 2 : 1;
           note(buf, {
             f: hz(pitch) * octave,
-            t0: t + s * (beat / 4),
-            dur: beat * 0.16,
-            gain: 0.07 * (s % 4 === 0 ? 1.2 : 0.82),
-            kind: 'warm', a: 0.003, d: 0.1, s: 0.2, r: 0.16,
+            t0: t + e * (beat / 2) + rng() * 0.012,
+            dur: 0.09,
+            gain: 0.05 * (e % 2 === 0 ? 1 : 0.68),
+            kind: 'warm', a: 0.004, d: 0.2, s: 0.1, r: 0.5,
           });
         }
-        note(buf, { f: hz(shape[0]) / 2, t0: t, dur: beat * 1.8, gain: 0.2, kind: 'saw', a: 0.006, d: 0.2, s: 0.5, r: 0.2 });
-        note(buf, { f: hz(shape[0]) / 2, t0: t + beat * 2.5, dur: beat * 1.2, gain: 0.16, kind: 'saw', a: 0.006, d: 0.2, s: 0.45, r: 0.2 });
-        for (let b = 0; b < 4; b++) {
-          kick(buf, t + b * beat, b === 0 ? 0.72 : 0.6);
-          noiseHit(buf, t + b * beat + beat / 2, 0.07, 0.028, rng, 0.9);
-          noiseHit(buf, t + b * beat + beat * 0.75, 0.035, 0.02, rng, 0.9);
-        }
-        clap(buf, t + beat * 2, 0.07, rng);
       }
-      lowpass(buf, 9500);
-      return wrapDelay(buf, beat * 0.375, 0.24, 0.2);
+      // Two high sparkles per loop, off the grid.
+      for (const [t0, pitch] of [[bar * 1.4, 'G5'], [bar * 5.6, 'C6']]) {
+        note(buf, { f: hz(pitch), t0, dur: 0.1, gain: 0.028, kind: 'sine', a: 0.005, d: 0.5, s: 0.1, r: 1.6 });
+      }
+      duckMids(buf);
+      lowpass(buf, 6800);
+      return wrapDelay(buf, beat * 0.75, 0.4, 0.42);
     },
   },
   {
-    id: 'business-01',
-    title: 'Clean Slate',
-    category: 'Business',
-    file: 'clean-slate.mp3',
-    mood: 'Bright plucks, light kick, unobtrusive',
+    id: 'cinematic-04',
+    title: 'Long Shadow',
+    category: 'Cinematic',
+    file: 'long-shadow.mp3',
+    mood: 'Slow minor swell with a cello-like low end',
     build() {
-      const { buf, beat, bar, rng } = grid(108, 8, 109);
+      const { buf, beat, bar } = grid(56, 8, 307);
+      // i - VI - III - VII in D minor. Emotional without turning mournful.
       const progression = [
-        ['E4', 'G#4', 'B4', 'D#5'],
-        ['C#4', 'E4', 'G#4', 'B4'],
-        ['A3', 'C#4', 'E4', 'G#4'],
-        ['B3', 'D#4', 'F#4', 'A4'],
+        ['D3', 'F3', 'A3'],
+        ['Bb2', 'D3', 'F3'],
+        ['F2', 'A2', 'C3'],
+        ['C3', 'E3', 'G3'],
       ];
-      const roots = ['E2', 'C#2', 'A1', 'B1'];
+      for (let i = 0; i < 8; i++) {
+        const voicing = progression[i % 4];
+        const t = i * bar;
+        chord(buf, voicing, {
+          t0: t, dur: bar * 0.9, gain: 0.07, kind: 'reed',
+          a: 1.9, d: 1.2, s: 0.64, r: 2.2, detune: 0.0022, vib: 0.018, vibRate: 0.35,
+        });
+        // Bowed root: long attack, no transient, so it reads as a string section.
+        note(buf, {
+          f: hz(voicing[0]) / 2, t0: t, dur: bar * 0.95, gain: 0.15,
+          kind: 'tri', a: 1.1, d: 0.8, s: 0.66, r: 1.6, vib: 0.02, vibRate: 4.2,
+        });
+      }
+      // Sparse falling thirds, one every other bar.
+      const figure = ['A4', 'F4', 'D4', 'C4', 'A3', 'F4'];
+      for (let i = 0; i < figure.length; i++) {
+        note(buf, {
+          f: hz(figure[i]), t0: bar * 0.6 + i * bar * 1.3, dur: 0.2,
+          gain: 0.045, kind: 'sine', a: 0.008, d: 0.7, s: 0.14, r: 2.4,
+        });
+      }
+      // Two distant low hits mark the halves of the loop.
+      boom(buf, 0, 0.3);
+      boom(buf, bar * 4, 0.24);
+      duckMids(buf, 340, 3200, 0.6);
+      lowpass(buf, 5200);
+      return wrapDelay(buf, beat * 1.5, 0.5, 0.55);
+    },
+  },
+  {
+    id: 'calm-03',
+    title: 'Quiet Rooms',
+    category: 'Calm',
+    file: 'quiet-rooms.mp3',
+    mood: 'Soft felt-piano motif, nothing else in the way',
+    build() {
+      const { buf, beat, bar, rng } = grid(60, 8, 419);
+      const progression = [
+        ['F3', 'A3', 'C4'],
+        ['C3', 'E3', 'G3'],
+        ['D3', 'F3', 'A3'],
+        ['Bb2', 'D3', 'F3'],
+      ];
+      const motif = ['A4', 'C5', 'G4', 'F4', 'A4', 'D5', 'C5', 'G4'];
       for (let i = 0; i < 8; i++) {
         const t = i * bar;
+        chord(buf, progression[i % 4], {
+          t0: t, dur: bar * 0.92, gain: 0.055, kind: 'reed',
+          a: 1.5, d: 1.1, s: 0.66, r: 2.0, detune: 0.0015,
+        });
+        note(buf, {
+          f: hz(progression[i % 4][0]) / 2, t0: t, dur: bar * 0.9, gain: 0.13,
+          kind: 'sine', a: 0.7, d: 0.6, s: 0.6, r: 1.5,
+        });
+        // Two notes a bar, humanised in both time and level: the "felt piano"
+        // feel comes from the unevenness, not from the timbre.
+        for (const beatOffset of [0, 2.5]) {
+          const pitch = motif[(i * 2 + (beatOffset > 0 ? 1 : 0)) % motif.length];
+          const t0 = t + beatOffset * beat + rng() * 0.05;
+          note(buf, {
+            f: hz(pitch), t0, dur: 0.14,
+            gain: 0.055 + rng() * 0.012, kind: 'sine', a: 0.006, d: 0.45, s: 0.13, r: 1.9,
+          });
+          // Hammer noise, barely audible, sells the mechanism.
+          noiseHit(buf, t0, 0.006, 0.014, rng, 0.9);
+        }
+      }
+      duckMids(buf, 400, 3000, 0.5);
+      lowpass(buf, 4600);
+      return wrapDelay(buf, beat, 0.44, 0.5);
+    },
+  },
+  {
+    id: 'inspirational-03',
+    title: 'Small Victories',
+    category: 'Inspirational',
+    file: 'small-victories.mp3',
+    mood: 'Plucked ostinato that lifts into a soft pulse',
+    build() {
+      const { buf, beat, bar, rng } = grid(88, 10, 523);
+      const progression = [
+        ['G3', 'B3', 'D4'],
+        ['D3', 'F#3', 'A3'],
+        ['E3', 'G3', 'B3'],
+        ['C3', 'E3', 'G3'],
+      ];
+      const ostinato = ['D4', 'G4', 'B4', 'G4', 'A4', 'D5', 'B4', 'G4'];
+      for (let i = 0; i < 10; i++) {
         const voicing = progression[i % 4];
-        const pattern = [0, 1, 2, 3, 2, 1, 3, 2];
+        const t = i * bar;
+        // The pad only arrives in the second half — that is the "lift".
+        const padGain = i < 4 ? 0.03 : 0.058;
+        chord(buf, voicing, {
+          t0: t, dur: bar * 0.95, gain: padGain, kind: 'reed',
+          a: 0.9, d: 0.8, s: 0.7, r: 1.4, detune: 0.002,
+        });
+        note(buf, {
+          f: hz(voicing[0]) / 2, t0: t, dur: beat * 3.6, gain: 0.15,
+          kind: 'tri', a: 0.06, d: 0.5, s: 0.55, r: 0.7,
+        });
         for (let e = 0; e < 8; e++) {
           note(buf, {
-            f: hz(voicing[pattern[e]]),
-            t0: t + e * (beat / 2),
-            dur: 0.09,
-            gain: 0.06 * (e % 4 === 0 ? 1.15 : 0.8),
-            kind: 'sine', a: 0.003, d: 0.16, s: 0.1, r: 0.32,
+            f: hz(ostinato[(e + i) % ostinato.length]),
+            t0: t + e * (beat / 2) + rng() * 0.008,
+            dur: 0.06,
+            gain: 0.045 * (e % 2 === 0 ? 1 : 0.7),
+            kind: 'warm', a: 0.003, d: 0.14, s: 0.08, r: 0.34,
           });
         }
-        note(buf, { f: hz(roots[i % 4]), t0: t, dur: beat * 1.7, gain: 0.16, kind: 'tri', a: 0.014, d: 0.28, s: 0.5, r: 0.35 });
-        note(buf, { f: hz(roots[i % 4]), t0: t + beat * 2, dur: beat * 1.7, gain: 0.13, kind: 'tri', a: 0.014, d: 0.28, s: 0.45, r: 0.35 });
-        chord(buf, [voicing[0], voicing[2]], { t0: t, dur: bar * 0.9, gain: 0.032, kind: 'reed', a: 0.7, d: 0.6, s: 0.7, r: 0.9, detune: 0.002 });
-        kick(buf, t, 0.42);
-        kick(buf, t + beat * 2, 0.34);
-        for (let s = 0; s < 8; s++) noiseHit(buf, t + s * (beat / 2) + beat / 4, 0.03, 0.022, rng, 0.88);
+        if (i >= 4) {
+          kick(buf, t, 0.3);
+          kick(buf, t + beat * 2, 0.22);
+          for (let b = 0; b < 4; b++) {
+            noiseHit(buf, t + b * beat + beat / 2, 0.026, 0.022, rng, 0.88);
+          }
+        }
       }
-      lowpass(buf, 8600);
-      return wrapDelay(buf, beat / 2, 0.24, 0.22);
+      duckMids(buf, 420, 3600, 0.5);
+      lowpass(buf, 7600);
+      return wrapDelay(buf, beat * 0.75, 0.3, 0.3);
+    },
+  },
+  {
+    id: 'cinematic-05',
+    title: 'Slow Tide',
+    category: 'Cinematic',
+    file: 'slow-tide.mp3',
+    mood: 'Tidal swells with no pulse at all',
+    build() {
+      // No tempo: a 34 second bed that breathes rather than counts.
+      const seconds = 34;
+      const buf = new Float32Array(Math.round(seconds * SR));
+      const rng = mulberry32(631);
+      // Four drones, each with its own tremolo rate. Because every rate is a
+      // whole number of cycles per loop they all meet again at the seam.
+      for (const [pitch, gain, tremolo, cycles] of [
+        ['A1', 0.2, 0.1, 1],
+        ['A2', 0.13, 0.26, 2],
+        ['E3', 0.085, 0.34, 3],
+        ['C#4', 0.05, 0.42, 5],
+      ]) {
+        drone(buf, { f: hz(pitch), gain, kind: 'reed', detune: 0.0016, tremolo, tremoloCycles: cycles });
+      }
+      // Breath: noise shaped by a slow swell, twice per loop.
+      const swells = 2;
+      for (let i = 0; i < buf.length; i++) {
+        const phase = (i / buf.length) * swells * Math.PI * 2;
+        const shape = Math.pow(0.5 - 0.5 * Math.cos(phase), 2.2);
+        buf[i] += (rng() * 2 - 1) * 0.05 * shape;
+      }
+      // Rising sine that arrives at the loop point, so the seam feels intended.
+      const riseFrom = Math.round(buf.length * 0.72);
+      let phase = 0;
+      for (let i = riseFrom; i < buf.length; i++) {
+        const x = (i - riseFrom) / (buf.length - riseFrom);
+        phase += (2 * Math.PI * (hz('A2') * (1 + x * 0.5))) / SR;
+        buf[i] += Math.sin(phase) * 0.05 * x * x;
+      }
+      duckMids(buf, 320, 3000, 0.62);
+      lowpass(buf, 3400);
+      return wrapDelay(buf, 1.4, 0.55, 0.62);
     },
   },
   {
@@ -675,60 +599,106 @@ const TRACKS = [
     },
   },
   {
-    id: 'ambient-01',
-    title: 'Deep Field',
-    category: 'Ambient',
-    file: 'deep-field.mp3',
-    mood: 'Slowly beating drones, no pulse at all',
+    id: 'business-03',
+    title: 'Clear Signal',
+    category: 'Business',
+    file: 'clear-signal.mp3',
+    mood: 'Understated modern pulse for talking over',
     build() {
-      // No tempo — a plain 24 second bed.
-      const seconds = 24;
-      const buf = new Float32Array(Math.round(seconds * SR));
-      const rng = mulberry32(151);
-      // Two near-unison pairs a fifth apart: the slight detune makes the pad
-      // breathe on its own, which is what keeps a static drone interesting.
-      for (const [pitch, gain, det] of [['D2', 0.2, 0.0012], ['A2', 0.14, 0.0016], ['D3', 0.1, 0.002], ['F3', 0.075, 0.0024]]) {
-        drone(buf, { f: hz(pitch), gain, kind: 'reed', detune: det, tremolo: 0.22, tremoloCycles: 2 });
-      }
-      const pings = ['A4', 'D5', 'F4', 'A4', 'C5'];
-      for (let i = 0; i < pings.length; i++) {
-        note(buf, {
-          f: hz(pings[i]), t0: 2.4 + i * 4.3 + rng() * 0.5, dur: 0.12,
-          gain: 0.05, kind: 'sine', a: 0.008, d: 0.6, s: 0.12, r: 2.2,
+      const { buf, beat, bar, rng } = grid(104, 12, 733);
+      // Sus2 voicings: forward-moving without the corporate major-chord grin.
+      const progression = [
+        ['A3', 'B3', 'E4'],
+        ['G3', 'A3', 'D4'],
+        ['D3', 'E3', 'A3'],
+        ['E3', 'F#3', 'B3'],
+      ];
+      const figure = ['E4', 'A4', 'B4', 'A4', 'D5', 'B4', 'A4', 'E4'];
+      for (let i = 0; i < 12; i++) {
+        const voicing = progression[i % 4];
+        const t = i * bar;
+        chord(buf, voicing, {
+          t0: t, dur: bar * 0.94, gain: 0.042, kind: 'reed',
+          a: 0.8, d: 0.7, s: 0.72, r: 1.2, detune: 0.0018,
         });
+        note(buf, {
+          f: hz(voicing[0]) / 2, t0: t, dur: beat * 3.7, gain: 0.14,
+          kind: 'tri', a: 0.05, d: 0.45, s: 0.55, r: 0.6,
+        });
+        // Bell figure on the off-beats only, so the downbeat stays clear for speech.
+        for (let e = 0; e < 4; e++) {
+          note(buf, {
+            f: hz(figure[(e + i * 2) % figure.length]),
+            t0: t + e * beat + beat * 0.5,
+            dur: 0.06,
+            gain: 0.038,
+            kind: 'sine', a: 0.002, d: 0.12, s: 0.06, r: 0.3,
+          });
+        }
+        // Percussion holds back for the first third.
+        if (i >= 4) {
+          kick(buf, t, 0.24);
+          if (i % 2 === 1) kick(buf, t + beat * 2.5, 0.18);
+          for (let b = 0; b < 4; b++) noiseHit(buf, t + b * beat + beat / 2, 0.022, 0.02, rng, 0.9);
+        }
       }
-      lowpass(buf, 3000);
-      return wrapDelay(buf, 1.1, 0.52, 0.6);
+      duckMids(buf, 450, 3800, 0.45);
+      lowpass(buf, 7200);
+      return wrapDelay(buf, beat * 0.75, 0.24, 0.24);
     },
   },
   {
-    id: 'ambient-02',
-    title: 'Night Air',
+    id: 'ambient-03',
+    title: 'Warm Static',
     category: 'Ambient',
-    file: 'night-air.mp3',
-    mood: 'Sparse high pings over a soft low bed',
+    file: 'warm-static.mp3',
+    mood: 'Tape-warm chords under a soft layer of air',
     build() {
-      const seconds = 24;
+      const seconds = 32;
       const buf = new Float32Array(Math.round(seconds * SR));
-      const rng = mulberry32(163);
-      for (const [pitch, gain, tremolo, cycles] of [
-        ['E2', 0.17, 0.18, 1],
-        ['B2', 0.1, 0.3, 3],
-        ['G3', 0.07, 0.4, 2],
-      ]) {
-        drone(buf, { f: hz(pitch), gain, kind: 'reed', detune: 0.0018, tremolo, tremoloCycles: cycles });
-      }
-      const pings = ['B4', 'E5', 'G4', 'F#5', 'B4', 'D5', 'E5'];
-      for (let i = 0; i < pings.length; i++) {
+      const rng = mulberry32(857);
+      // One chord every eight seconds, each one overlapping the next.
+      const chords = [
+        ['Eb3', 'G3', 'Bb3'],
+        ['Bb2', 'D3', 'F3'],
+        ['C3', 'Eb3', 'G3'],
+        ['Ab2', 'C3', 'Eb3'],
+      ];
+      for (let i = 0; i < chords.length; i++) {
+        chord(buf, chords[i], {
+          t0: i * 8, dur: 7.4, gain: 0.075, kind: 'warm',
+          a: 2.4, d: 1.6, s: 0.6, r: 3.2, detune: 0.0026,
+        });
         note(buf, {
-          f: hz(pings[i]), t0: 1.2 + i * 3.1 + rng() * 0.7, dur: 0.1,
-          gain: 0.055 + rng() * 0.015, kind: 'sine', a: 0.006, d: 0.45, s: 0.1, r: 2.4,
+          f: hz(chords[i][0]) / 2, t0: i * 8, dur: 7.6, gain: 0.15,
+          kind: 'sine', a: 1.2, d: 1.0, s: 0.6, r: 2.4,
         });
       }
-      // Barely-there air, well under the pad.
-      for (let i = 0; i < buf.length; i++) buf[i] += (rng() * 2 - 1) * 0.004;
-      lowpass(buf, 3600);
-      return wrapDelay(buf, 0.9, 0.5, 0.58);
+      // Steady air. Level is constant across the loop, so there is no seam in it.
+      let prev = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const n = rng() * 2 - 1;
+        // Slight low-pass on the noise itself keeps it warm rather than hissy.
+        prev = prev * 0.86 + n * 0.14;
+        buf[i] += prev * 0.09;
+      }
+      // Wow: a slow pitch drift is what makes a pad sound like tape. Applied as a
+      // whole number of cycles per loop so the drift meets itself at the seam.
+      const wowed = new Float32Array(buf.length);
+      const depth = 0.0022;
+      for (let i = 0; i < buf.length; i++) {
+        const phase = (i / buf.length) * Math.PI * 2 * 3;
+        const source = i + Math.sin(phase) * depth * SR;
+        const base = Math.floor(source);
+        const frac = source - base;
+        const a = buf[((base % buf.length) + buf.length) % buf.length];
+        const b = buf[(((base + 1) % buf.length) + buf.length) % buf.length];
+        wowed[i] = a + (b - a) * frac;
+      }
+      buf.set(wowed);
+      duckMids(buf, 380, 3200, 0.55);
+      lowpass(buf, 3800);
+      return wrapDelay(buf, 1.2, 0.48, 0.55);
     },
   },
 ];

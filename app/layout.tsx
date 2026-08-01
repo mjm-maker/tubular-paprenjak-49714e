@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { DM_Mono, Familjen_Grotesk, Instrument_Serif } from 'next/font/google';
+import { DM_Mono, Familjen_Grotesk, Instrument_Serif, Inter } from 'next/font/google';
 import './globals.css';
 
 const instrumentSerif = Instrument_Serif({
@@ -20,6 +20,21 @@ const dmMono = DM_Mono({
   weight: ['400', '500'],
   display: 'swap',
   variable: '--font-dm-mono',
+});
+
+/**
+ * The only face in the app that carries Cyrillic.
+ *
+ * Subtitles and the watermark are drawn onto the canvas, and a font without
+ * Cyrillic coverage would render Bulgarian as fallback glyphs — different metrics,
+ * different weight, and in the exported MP4 rather than only on screen. Inter covers
+ * both alphabets in one variable font, so a bilingual subtitle stays visually
+ * consistent line to line.
+ */
+const inter = Inter({
+  subsets: ['latin', 'cyrillic'],
+  display: 'swap',
+  variable: '--font-inter',
 });
 
 export const metadata: Metadata = {
@@ -46,7 +61,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html
       lang="en"
-      className={`${instrumentSerif.variable} ${familjen.variable} ${dmMono.variable}`}
+      className={`${instrumentSerif.variable} ${familjen.variable} ${dmMono.variable} ${inter.variable}`}
     >
       <body>
         {children}

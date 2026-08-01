@@ -1,93 +1,53 @@
 [
   {
-    "id": "calm-01",
-    "title": "Soft Morning",
-    "category": "Calm",
-    "src": "/music/soft-morning.mp3",
-    "duration": 28.24,
-    "artist": "GLASKO Library",
-    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
-    "mood": "Weightless piano-pad haze, no percussion"
-  },
-  {
-    "id": "calm-02",
-    "title": "Still Water",
-    "category": "Calm",
-    "src": "/music/still-water.mp3",
-    "duration": 24,
-    "artist": "GLASKO Library",
-    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
-    "mood": "Slow swelling pads over a low drone"
-  },
-  {
-    "id": "inspirational-01",
-    "title": "First Light",
-    "category": "Inspirational",
-    "src": "/music/first-light.mp3",
-    "duration": 20.87,
-    "artist": "GLASKO Library",
-    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
-    "mood": "Rising arpeggio, soft kick, wide pad"
-  },
-  {
-    "id": "inspirational-02",
-    "title": "Open Road",
-    "category": "Inspirational",
-    "src": "/music/open-road.mp3",
-    "duration": 19.2,
-    "artist": "GLASKO Library",
-    "license": "CC0 1.0 — public domain, synthesised for GLASKO",
-    "mood": "Anthemic chord plucks with a steady pulse"
-  },
-  {
-    "id": "cinematic-01",
-    "title": "Wide Horizon",
+    "id": "cinematic-03",
+    "title": "Northern Light",
     "category": "Cinematic",
-    "src": "/music/wide-horizon.mp3",
-    "duration": 25.26,
+    "src": "/music/northern-light.mp3",
+    "duration": 30,
     "artist": "GLASKO Library",
     "license": "CC0 1.0 — public domain, synthesised for GLASKO",
-    "mood": "Minor pad swells, low drone, distant hits"
+    "mood": "Warm arpeggio over a wide pad — open and hopeful"
   },
   {
-    "id": "cinematic-02",
-    "title": "Slow Reveal",
+    "id": "cinematic-04",
+    "title": "Long Shadow",
     "category": "Cinematic",
-    "src": "/music/slow-reveal.mp3",
-    "duration": 24,
+    "src": "/music/long-shadow.mp3",
+    "duration": 34.29,
     "artist": "GLASKO Library",
     "license": "CC0 1.0 — public domain, synthesised for GLASKO",
-    "mood": "Suspended chords opening up across eight bars"
+    "mood": "Slow minor swell with a cello-like low end"
   },
   {
-    "id": "energetic-01",
-    "title": "Pulse Line",
-    "category": "Energetic",
-    "src": "/music/pulse-line.mp3",
-    "duration": 15.48,
+    "id": "calm-03",
+    "title": "Quiet Rooms",
+    "category": "Calm",
+    "src": "/music/quiet-rooms.mp3",
+    "duration": 32,
     "artist": "GLASKO Library",
     "license": "CC0 1.0 — public domain, synthesised for GLASKO",
-    "mood": "Four-on-the-floor with a pumping bass and stabs"
+    "mood": "Soft felt-piano motif, nothing else in the way"
   },
   {
-    "id": "energetic-02",
-    "title": "Neon Run",
-    "category": "Energetic",
-    "src": "/music/neon-run.mp3",
-    "duration": 15,
+    "id": "inspirational-03",
+    "title": "Small Victories",
+    "category": "Inspirational",
+    "src": "/music/small-victories.mp3",
+    "duration": 27.27,
     "artist": "GLASKO Library",
     "license": "CC0 1.0 — public domain, synthesised for GLASKO",
-    "mood": "Driving sixteenth-note arpeggio"
+    "mood": "Plucked ostinato that lifts into a soft pulse"
   },
   {
-    "id": "business-01",
-    "title": "Clean Slate",
-    "category": "Business",
-    "src": "/music/clean-slate.mp3",
-    "duration": 17.78,
+    "id": "cinematic-05",
+    "title": "Slow Tide",
+    "category": "Cinematic",
+    "src": "/music/slow-tide.mp3",
+    "duration": 34,
     "artist": "GLASKO Library",
     "license": "CC0 1.0 — public domain, synthesised for GLASKO",
-    "mood": "Bright plucks, light kick, unobtrusive"
+    "mood": "Tidal swells with no pulse at all"
   },
   {
     "id": "business-02",
@@ -100,23 +60,23 @@
     "mood": "Marimba-style motif with a calm pulse"
   },
   {
-    "id": "ambient-01",
-    "title": "Deep Field",
-    "category": "Ambient",
-    "src": "/music/deep-field.mp3",
-    "duration": 24,
+    "id": "business-03",
+    "title": "Clear Signal",
+    "category": "Business",
+    "src": "/music/clear-signal.mp3",
+    "duration": 27.69,
     "artist": "GLASKO Library",
     "license": "CC0 1.0 — public domain, synthesised for GLASKO",
-    "mood": "Slowly beating drones, no pulse at all"
+    "mood": "Understated modern pulse for talking over"
   },
   {
-    "id": "ambient-02",
-    "title": "Night Air",
+    "id": "ambient-03",
+    "title": "Warm Static",
     "category": "Ambient",
-    "src": "/music/night-air.mp3",
-    "duration": 24,
+    "src": "/music/warm-static.mp3",
+    "duration": 32,
     "artist": "GLASKO Library",
     "license": "CC0 1.0 — public domain, synthesised for GLASKO",
-    "mood": "Sparse high pings over a soft low bed"
+    "mood": "Tape-warm chords under a soft layer of air"
   }
 ]

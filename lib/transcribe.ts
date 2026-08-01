@@ -9,9 +9,15 @@
  *
  * Everything here reports progress and awaits between slices, so the interface keeps
  * painting while a long recording is being transcribed.
+ *
+ * The timings that come back are the model's opinion, and a model tends to report a
+ * cue slightly after the words it heard. `lib/align.ts` settles that against the
+ * recording itself before the cues are returned, so callers only ever see cues that
+ * sit on the speech.
  */
 
-import { type AudioAnalysis } from './analysis';
+import { alignCuesToSpeech } from './align';
+import { computeEnvelope, ENV_RATE, type AudioAnalysis } from './analysis';
 import { normaliseCues, type SubtitleCue, type SubtitleLanguage } from './subtitles';
 
 /** What the routes are told to expect, and what the model is happiest with. */
@@ -316,9 +322,9 @@ export async function transcribeVoice(options: TranscribeOptions): Promise<Trans
     );
   }
 
-  report('transcribe', 1, 'Tidying the timings');
+  report('transcribe', 1, 'Aligning to the voice');
   const spoken = language ?? 'bg';
-  const cues = normaliseCues(
+  const timed = normaliseCues(
     collected.map((cue, index) => ({
       id: `c${index}`,
       start: cue.start,
@@ -328,6 +334,16 @@ export async function transcribeVoice(options: TranscribeOptions): Promise<Trans
     })),
     voice.duration,
   );
+
+  // The model's timings are a first guess; the recording is the source of truth. The
+  // envelope the waveform animation already runs on says where the speech actually
+  // starts, so the cues are pulled onto it here — once, before anything draws them,
+  // so the preview, the MP4 and the sidecar files cannot disagree about when a line
+  // appears. Reuse the analysis when the caller has one; a caller without one gets
+  // the same envelope computed from the voice buffer rather than losing the fix.
+  const env = analysis?.env ?? computeEnvelope(voice);
+  const envRate = analysis?.envRate ?? ENV_RATE;
+  const cues = alignCuesToSpeech(timed, { env, envRate, duration: voice.duration }).cues;
 
   return { language: spoken, cues };
 }

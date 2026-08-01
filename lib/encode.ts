@@ -58,6 +58,16 @@ export interface EncodeOptions {
 const AUDIO_BITRATE = 128_000;
 
 /**
+ * Lead-in the realtime pipelines schedule the voice with, in seconds.
+ *
+ * Small, but the point is that it is *scheduled*: the paint loop draws against the
+ * instant the voice was told to begin, so the frames and the sound share one clock.
+ * Starting the source "now" instead leaves the two a JavaScript task apart, and every
+ * frame — the subtitles included — sits that far ahead of the words.
+ */
+const AUDIO_START_LEAD = 0.06;
+
+/**
  * Channels written into every export.
  *
  * Fixed at two rather than copied from the input. A mono AAC track is one of the
@@ -653,13 +663,15 @@ async function recordRealtime(options: EncodeOptions, mimeType: string): Promise
       throw new Error('The audio engine would not start, so the video would have no sound.');
     }
     recorder.start(1000);
-    const startedAt = audioContext.currentTime;
-    source.start();
+    const startedAt = audioContext.currentTime + AUDIO_START_LEAD;
+    source.start(startedAt);
     let lastReport = -1;
 
     const paint = () => {
       if (finished) return;
-      const elapsed = audioContext.currentTime - startedAt;
+      // Clamped, so the lead-in holds on the first frame instead of running the clip
+      // backwards — the voice has not started yet, and neither has the video.
+      const elapsed = Math.max(0, audioContext.currentTime - startedAt);
       const index = Math.min(analysis.frameCount - 1, Math.max(0, Math.round(elapsed * FPS)));
       drawFrame(ctx, getFrameData(analysis, index), spec, index, 1);
       // Roughly ten updates a second: enough to look live, few enough that React

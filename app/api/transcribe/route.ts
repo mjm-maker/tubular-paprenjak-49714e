@@ -63,6 +63,7 @@ Rules:
 - Bulgarian must be written in Cyrillic with correct spelling and diacritics-free standard orthography. Never transliterate Bulgarian into Latin letters.
 - Split the transcript into short subtitle cues: at most 9 words or about 3.5 seconds each, broken at natural clause and sentence boundaries, never mid-word.
 - "start" and "end" are seconds from the beginning of THIS audio clip, as decimals. They must increase, must not overlap, and must stay inside the clip's length.
+- "start" is the instant the cue's first word begins to be heard and "end" the instant its last word finishes. Do not round to whole or half seconds, do not pad the start, and never report a cue later than the audio it covers — a late timestamp puts the subtitle behind the speaker.
 - Punctuate and capitalise normally. Do not add speaker labels, timestamps inside the text, sound effects, or commentary.
 - If the clip contains no intelligible speech, return an empty "cues" array.`;
 
@@ -136,7 +137,8 @@ export async function POST(request: Request) {
       }))
       .filter((cue) => Number.isFinite(cue.start) && Number.isFinite(cue.end) && cue.text.length > 0)
       // Shift into the whole recording's timeline here, so the browser never has to
-      // know that the audio was cut into slices.
+      // know that the audio was cut into slices. Precision beyond this point is the
+      // browser's job: `lib/align.ts` settles the model's timings against the voice.
       .map((cue) => ({
         start: Math.max(0, cue.start) + offset,
         end: Math.max(cue.start + 0.4, cue.end) + offset,

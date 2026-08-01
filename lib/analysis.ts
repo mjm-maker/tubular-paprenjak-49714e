@@ -128,6 +128,45 @@ function bandRanges(sampleRate: number): Array<[number, number]> {
   return ranges;
 }
 
+/**
+ * Peak amplitude per `1 / envRate` second, normalised to the loudest moment.
+ *
+ * One definition, used by the waveform animation, by the slice planner in
+ * `lib/transcribe.ts` and by the subtitle aligner in `lib/align.ts` — so "where the
+ * speech actually is" means the same thing everywhere it is asked.
+ */
+function envelopeFrom(mono: Float32Array, sampleRate: number, envRate: number): Float32Array {
+  const seconds = mono.length / sampleRate;
+  const envLength = Math.max(1, Math.ceil(seconds * envRate));
+  const env = new Float32Array(envLength);
+  const samplesPerEnv = sampleRate / envRate;
+  let envPeak = 0;
+
+  for (let e = 0; e < envLength; e++) {
+    const start = Math.floor(e * samplesPerEnv);
+    const end = Math.min(mono.length, Math.floor((e + 1) * samplesPerEnv));
+    let peak = 0;
+    for (let i = start; i < end; i++) {
+      const abs = Math.abs(mono[i]);
+      if (abs > peak) peak = abs;
+    }
+    env[e] = peak;
+    if (peak > envPeak) envPeak = peak;
+  }
+
+  const envScale = envPeak > 1e-5 ? 1 / envPeak : 0;
+  for (let e = 0; e < envLength; e++) {
+    // Slight perceptual lift so quiet speech still shows movement.
+    env[e] = Math.pow(Math.min(1, env[e] * envScale), 0.8);
+  }
+  return env;
+}
+
+/** The same envelope `analyseAudio` builds, for callers that only need that. */
+export function computeEnvelope(buffer: AudioBuffer, envRate: number = ENV_RATE): Float32Array {
+  return envelopeFrom(toMono(buffer), buffer.sampleRate, envRate);
+}
+
 const yieldToUi = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 /**
@@ -143,26 +182,7 @@ export async function analyseAudio(
   const frameCount = Math.max(1, Math.ceil(duration * FPS));
 
   // --- Amplitude envelope -------------------------------------------------
-  const envLength = Math.max(1, Math.ceil(duration * ENV_RATE));
-  const env = new Float32Array(envLength);
-  const samplesPerEnv = sampleRate / ENV_RATE;
-  let envPeak = 0;
-  for (let e = 0; e < envLength; e++) {
-    const start = Math.floor(e * samplesPerEnv);
-    const end = Math.min(mono.length, Math.floor((e + 1) * samplesPerEnv));
-    let peak = 0;
-    for (let i = start; i < end; i++) {
-      const abs = Math.abs(mono[i]);
-      if (abs > peak) peak = abs;
-    }
-    env[e] = peak;
-    if (peak > envPeak) envPeak = peak;
-  }
-  const envScale = envPeak > 1e-5 ? 1 / envPeak : 0;
-  for (let e = 0; e < envLength; e++) {
-    // Slight perceptual lift so quiet speech still shows movement.
-    env[e] = Math.pow(Math.min(1, env[e] * envScale), 0.8);
-  }
+  const env = envelopeFrom(mono, sampleRate, ENV_RATE);
 
   // --- Spectrum + loudness per video frame --------------------------------
   const ranges = bandRanges(sampleRate);

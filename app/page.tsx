@@ -238,7 +238,9 @@ export default function Home() {
       fonts,
       subtitles:
         subtitles.mode !== 'none' && cues.length > 0 ? { cues, settings: subtitles } : null,
-      // `watermarkFor` is the single place a GLASKO PRO account would switch this off.
+      // Mandatory in the free version: `watermarkFor` decides `enabled`, and the state
+      // above only carries the corner, so nothing here can clear the mark. A future
+      // GLASKO PRO account would pass `true` as the second argument.
       watermark: watermarkFor(watermark),
     }),
     [animation, background, cues, fonts, format, image, subtitles, watermark],

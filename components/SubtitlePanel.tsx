@@ -224,7 +224,8 @@ export default function SubtitlePanel({
                   <p className="label-mono normal-case tracking-normal">
                     {cues.length} cues · {formatDuration(cueCoverage(cues))} of{' '}
                     {formatDuration(duration)} covered
-                    {detected ? ` · recognised as ${LANGUAGE_LABEL[detected]}` : ''}
+                    {detected ? ` · recognised as ${LANGUAGE_LABEL[detected]}` : ''} · timed
+                    against your voice
                   </p>
                 ) : (
                   <p className="text-sm leading-relaxed text-ash">

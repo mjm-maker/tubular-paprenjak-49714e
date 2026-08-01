@@ -131,7 +131,7 @@ export default function SubtitlePanel({
   return (
     <section className="panel" aria-labelledby="step-subtitles">
       <header className="mb-6 flex items-baseline gap-3">
-        <span className="step-index">05</span>
+        <span className="step-index">07</span>
         <h2 id="step-subtitles" className="font-display text-2xl leading-none">
           Subtitles
         </h2>

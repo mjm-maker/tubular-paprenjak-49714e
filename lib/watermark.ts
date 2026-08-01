@@ -48,10 +48,11 @@ export const WATERMARK_NAME = 'GLASKO';
 /**
  * Resolve what actually gets drawn, given the user's corner and their plan.
  *
- * `pro` is threaded through as a plain boolean rather than read from anywhere: there
- * is no account system yet, so the only honest thing to do is leave the parameter in
- * place, default it to `false`, and let a future sign-in flow pass `true`. Nothing in
- * the app calls it with `true` today, which is why the mark is always on.
+ * `pro` is threaded through as a plain boolean rather than read from anywhere: accounts
+ * exist now, but a GLASKO PRO plan does not — there is nothing to sell and nothing to
+ * check — so the only honest thing to do is leave the parameter in place, default it to
+ * `false`, and let a future plan lookup pass `true`. Nothing in the app calls it with
+ * `true` today, which is why the mark is always on, signed in or not.
  */
 export function watermarkFor(settings: WatermarkSettings, pro = false): ResolvedWatermark {
   return { ...settings, enabled: !pro };

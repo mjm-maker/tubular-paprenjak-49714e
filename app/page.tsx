@@ -1,12 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import AccountNav from '@/components/AccountNav';
 import AnimationPanel from '@/components/AnimationPanel';
 import BackgroundPanel from '@/components/BackgroundPanel';
 import ExportPanel, { type ExportState } from '@/components/ExportPanel';
 import FormatPanel from '@/components/FormatPanel';
+import HeadlinePanel from '@/components/HeadlinePanel';
 import { PauseIcon, PlayIcon, AlertIcon } from '@/components/Icons';
 import MusicPanel from '@/components/MusicPanel';
+import PicturePanel from '@/components/PicturePanel';
 import PreviewStage from '@/components/PreviewStage';
 import SharePanel from '@/components/SharePanel';
 import SiteFooter from '@/components/SiteFooter';
@@ -24,6 +27,7 @@ import {
   formatDuration,
 } from '@/lib/audio';
 import { canExportMp4, encodeVideo } from '@/lib/encode';
+import { DEFAULT_HEADLINE, headlineText, type HeadlineSettings } from '@/lib/headline';
 import { DEFAULT_FORMAT, formatById, type FormatId } from '@/lib/layout';
 import { type BrandLogo, loadBrandLogo } from '@/lib/logo';
 import {
@@ -39,6 +43,7 @@ import {
   type MusicTrack,
   type SelectedMusic,
 } from '@/lib/music';
+import { DEFAULT_PICTURE, type PictureSettings } from '@/lib/picture';
 import type { RenderSpec } from '@/lib/render';
 import {
   SHARE_TEXT,
@@ -150,6 +155,15 @@ export default function Home() {
   const [formatId, setFormatId] = useState<FormatId>(DEFAULT_FORMAT.id);
   const [watermark, setWatermark] = useState<WatermarkSettings>(DEFAULT_WATERMARK);
 
+  // The picture window and its own artwork. The settings can name the backdrop image
+  // instead, which is why the upload is kept even while that option is selected —
+  // switching back should not mean uploading the same photo twice.
+  const [picture, setPicture] = useState<PictureSettings>(DEFAULT_PICTURE);
+  const [pictureImage, setPictureImage] = useState<LoadedImage | null>(null);
+
+  // The topic line along the top of the frame.
+  const [headline, setHeadline] = useState<HeadlineSettings>(DEFAULT_HEADLINE);
+
   // Subtitles. The cues are language-complete; the mode only decides what is drawn.
   const [subtitles, setSubtitles] = useState<SubtitleSettings>(DEFAULT_SUBTITLE_SETTINGS);
   const [cues, setCues] = useState<SubtitleCue[]>([]);
@@ -224,6 +238,12 @@ export default function Home() {
     };
   }, [image]);
 
+  useEffect(() => {
+    return () => {
+      if (pictureImage) URL.revokeObjectURL(pictureImage.url);
+    };
+  }, [pictureImage]);
+
   // Only uploaded music owns an object URL; built-in tracks are static paths.
   useEffect(() => {
     return () => {
@@ -245,6 +265,21 @@ export default function Home() {
     [music, source],
   );
 
+  /**
+   * The artwork the picture window actually draws.
+   *
+   * The backdrop option only resolves while a backdrop *image* is loaded — a colour or
+   * a gradient has no artwork to inset — and an empty window is nothing rather than a
+   * blank plate, which is why this can be null with the switch still on.
+   */
+  const pictureArtwork = useMemo(() => {
+    if (!picture.enabled) return null;
+    if (picture.source === 'background') {
+      return background.kind === 'image' ? image?.element ?? null : null;
+    }
+    return pictureImage?.element ?? null;
+  }, [background.kind, image, picture.enabled, picture.source, pictureImage]);
+
   const spec = useMemo<RenderSpec>(
     () => ({
       format,
@@ -253,6 +288,10 @@ export default function Home() {
       animation,
       fonts,
       logo,
+      picture: pictureArtwork ? { settings: picture, image: pictureArtwork } : null,
+      // An empty topic draws nothing, so it is resolved to null here rather than
+      // leaving the renderer to measure a blank string.
+      headline: headlineText(headline) ? headline : null,
       subtitles:
         subtitles.mode !== 'none' && cues.length > 0 ? { cues, settings: subtitles } : null,
       // Mandatory in the free version: `watermarkFor` decides `enabled`, and the state
@@ -260,7 +299,20 @@ export default function Home() {
       // GLASKO PRO account would pass `true` as the second argument.
       watermark: watermarkFor(watermark),
     }),
-    [animation, background, cues, fonts, format, image, logo, subtitles, watermark],
+    [
+      animation,
+      background,
+      cues,
+      fonts,
+      format,
+      headline,
+      image,
+      logo,
+      picture,
+      pictureArtwork,
+      subtitles,
+      watermark,
+    ],
   );
 
   const pausePreview = useCallback(() => {
@@ -353,6 +405,39 @@ export default function Home() {
       URL.revokeObjectURL(url);
       setNotice((error as Error).message);
     }
+  }, []);
+
+  /**
+   * The picture window's own artwork.
+   *
+   * Decoded here rather than in the renderer for the same reason the backdrop is: the
+   * draw call is synchronous, so the frame needs an element that is already loaded.
+   * Uploading also selects the upload as the source, since asking for an image and
+   * then not seeing it would otherwise be the result of leaving the backdrop selected.
+   */
+  const handlePictureImage = useCallback(async (file: File) => {
+    const url = URL.createObjectURL(file);
+    try {
+      const element = new Image();
+      element.decoding = 'async';
+      await new Promise<void>((resolve, reject) => {
+        element.onload = () => resolve();
+        element.onerror = () => reject(new Error('That image could not be loaded.'));
+        element.src = url;
+      });
+      setPictureImage({ element, name: file.name, url });
+      setPicture((previous) => ({ ...previous, enabled: true, source: 'upload' }));
+      setNotice(null);
+    } catch (error) {
+      URL.revokeObjectURL(url);
+      setNotice((error as Error).message);
+    }
+  }, []);
+
+  /** Drops the window's upload. The window itself stays on, and can fall back to the
+   *  backdrop image if that is what is selected. */
+  const removePictureImage = useCallback(() => {
+    setPictureImage(null);
   }, []);
 
   const selectTrack = useCallback(async (track: MusicTrack) => {
@@ -922,16 +1007,22 @@ export default function Home() {
          * reserve the row before the image arrives so the headline below does not jump.
          * `max-w-*` caps it well under the headline at every breakpoint; the source is
          * ~2.6x the widest rendered size, so it stays sharp on retina phones too.
+         *
+         * The account controls share this row. They are an offer, not a gate: nothing
+         * below this line asks whether anyone is logged in.
          */}
-        <img
-          src="/glasko-logo.png"
-          alt="GLASKO"
-          width={787}
-          height={140}
-          decoding="async"
-          fetchPriority="high"
-          className="block h-auto w-full max-w-[220px] sm:max-w-[268px] lg:max-w-[300px]"
-        />
+        <div className="flex items-start justify-between gap-4">
+          <img
+            src="/glasko-logo.png"
+            alt="GLASKO"
+            width={787}
+            height={140}
+            decoding="async"
+            fetchPriority="high"
+            className="block h-auto w-full max-w-[220px] sm:max-w-[268px] lg:max-w-[300px]"
+          />
+          <AccountNav />
+        </div>
         <h1 className="mt-7 max-w-xl font-display text-[2.6rem] leading-[1.04] tracking-[-0.015em] sm:text-6xl">
           Turn your voice into
           <br />
@@ -994,6 +1085,16 @@ export default function Home() {
             onError={setNotice}
           />
           <AnimationPanel value={animation} onChange={setAnimation} />
+          <PicturePanel
+            settings={picture}
+            imageName={pictureImage?.name ?? null}
+            backdropName={background.kind === 'image' ? image?.name ?? null : null}
+            onSettings={setPicture}
+            onImage={handlePictureImage}
+            onRemove={removePictureImage}
+            onError={setNotice}
+          />
+          <HeadlinePanel settings={headline} onSettings={setHeadline} />
           <MusicPanel
             selected={music}
             loadingId={musicLoadingId}

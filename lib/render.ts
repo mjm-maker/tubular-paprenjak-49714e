@@ -14,8 +14,22 @@
  */
 
 import { BAND_COUNT, type FrameData } from './analysis';
-import { DEFAULT_FORMAT, type Layout, layoutFor, type VideoFormat } from './layout';
+import {
+  headlineIntro,
+  headlineText,
+  type HeadlineIntro,
+  type HeadlineSettings,
+} from './headline';
+import {
+  DEFAULT_FORMAT,
+  type Layout,
+  layoutFor,
+  padRect,
+  type Rect,
+  type VideoFormat,
+} from './layout';
 import { type BrandLogo, tintedBrandLogo } from './logo';
+import { planPicture, type PicturePlan, type PictureSettings } from './picture';
 import {
   cueAt,
   cueText,
@@ -49,12 +63,22 @@ export interface RenderSpec {
   logo?: BrandLogo | null;
   subtitles?: { cues: SubtitleCue[]; settings: SubtitleSettings } | null;
   /**
+   * The picture window. The artwork is resolved by the page — an upload of its own, or
+   * the backdrop image reused — and arrives here already decoded, because drawing is
+   * synchronous. Settings without an image draw nothing at all rather than a
+   * placeholder box: an empty frame in the export is worse than no inset.
+   */
+  picture?: { settings: PictureSettings; image: CanvasImageSource | null } | null;
+  /** The topic line along the top of the frame. */
+  headline?: HeadlineSettings | null;
+  /**
    * Always the output of `watermarkFor()` — the one place `enabled` is decided. In the
    * free version that means the mark is on, so the guard below is for a future paid
    * plan, not for a user setting.
    */
   watermark?: ResolvedWatermark;
 }
+
 
 // --- helpers --------------------------------------------------------------
 
@@ -273,30 +297,119 @@ function paintGrain(ctx: Ctx2D, layout: Layout, frameIndex: number): void {
   ctx.restore();
 }
 
-function paintWave(ctx: Ctx2D, layout: Layout, frame: FrameData, theme: RenderTheme): void {
-  const wave = frame.wave;
-  const { margin, width, centreX, stageY, stageHalfHeight } = layout;
-  const usable = width - margin * 2;
-  const step = usable / (wave.length - 1);
-  const minAmplitude = 3;
+/**
+ * Points the waveform is drawn through.
+ *
+ * `lib/analysis.ts` hands over a 529-sample window, which is far more detail than a
+ * stage a few hundred units wide can show: drawn one sample per pixel it reads as
+ * noise rather than as speech. Each bucket keeps its peak, so nothing quiet is
+ * invented and nothing loud is lost.
+ */
+const WAVE_POINTS = 72;
 
-  const buildPath = () => {
-    ctx.beginPath();
-    // Top edge, left to right.
-    for (let i = 0; i < wave.length; i++) {
-      const x = margin + i * step;
-      const y = stageY - Math.max(minAmplitude, wave[i] * stageHalfHeight);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    // Mirrored bottom edge, right to left.
-    for (let i = wave.length - 1; i >= 0; i--) {
-      const x = margin + i * step;
-      const y = stageY + Math.max(minAmplitude, wave[i] * stageHalfHeight);
-      ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-  };
+/** Bars actually drawn, aggregated from the 40 analysis bands. */
+const BAR_COUNT = 24;
+
+/** The pulse's tallest excursion, as a share of the stage the other two modes use. */
+const PULSE_SCALE = 0.3;
+
+/**
+ * How visible the pulse is. The brief asks for roughly 30%, and it is applied once as
+ * a `globalAlpha` over the whole line rather than folded into each colour, so the line
+ * cannot end up darker where it overlaps itself.
+ */
+const PULSE_OPACITY = 0.3;
+
+function pulseHalfHeight(layout: Layout): number {
+  return layout.stageHalfHeight * PULSE_SCALE;
+}
+
+/**
+ * Reduce the sample window to `points` peaks, then take one 1-2-1 pass over them.
+ *
+ * The smoothing is along the frame, never between frames: the export renders frame 45
+ * without having rendered 44, so anything remembered from the previous frame would
+ * move in the preview and sit still in the file.
+ */
+function resampleWave(wave: ArrayLike<number>, points: number): number[] {
+  const peaks = new Array<number>(points).fill(0);
+  const size = wave.length / points;
+  for (let i = 0; i < points; i++) {
+    const start = Math.floor(i * size);
+    const end = Math.max(start + 1, Math.floor((i + 1) * size));
+    let peak = 0;
+    for (let j = start; j < end && j < wave.length; j++) peak = Math.max(peak, wave[j]);
+    peaks[i] = peak;
+  }
+  const smoothed = peaks.slice();
+  for (let i = 1; i < points - 1; i++) {
+    smoothed[i] = (peaks[i - 1] + peaks[i] * 2 + peaks[i + 1]) / 4;
+  }
+  return smoothed;
+}
+
+interface Point {
+  x: number;
+  y: number;
+}
+
+/**
+ * Trace a polyline as a curve: every vertex becomes a control point and the curve
+ * passes through the midpoints between them.
+ *
+ * Cheap, and — unlike a spline fitted per frame — free of overshoot, so a loud syllable
+ * cannot make the outline bulge past its own peak. Assumes the path is already open at
+ * the first point.
+ */
+function traceThrough(ctx: Ctx2D, points: Point[]): void {
+  if (points.length === 0) return;
+  ctx.lineTo(points[0].x, points[0].y);
+  for (let i = 0; i < points.length - 1; i++) {
+    const midX = (points[i].x + points[i + 1].x) / 2;
+    const midY = (points[i].y + points[i + 1].y) / 2;
+    ctx.quadraticCurveTo(points[i].x, points[i].y, midX, midY);
+  }
+  const last = points[points.length - 1];
+  ctx.lineTo(last.x, last.y);
+}
+
+/**
+ * The closed, vertically mirrored outline both the waveform and the pulse are drawn
+ * from — one shape, two amplitudes.
+ */
+function waveOutline(
+  ctx: Ctx2D,
+  layout: Layout,
+  levels: number[],
+  half: number,
+  minAmplitude: number,
+): void {
+  const { centreX, stageY, stageHalfWidth } = layout;
+  const left = centreX - stageHalfWidth;
+  const step = (stageHalfWidth * 2) / Math.max(1, levels.length - 1);
+
+  const top: Point[] = levels.map((level, i) => ({
+    x: left + i * step,
+    y: stageY - Math.max(minAmplitude, level * half),
+  }));
+  const bottom: Point[] = [];
+  for (let i = top.length - 1; i >= 0; i--) {
+    bottom.push({ x: top[i].x, y: stageY * 2 - top[i].y });
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(top[0].x, top[0].y);
+  traceThrough(ctx, top);
+  traceThrough(ctx, bottom);
+  ctx.closePath();
+}
+
+function paintWave(ctx: Ctx2D, layout: Layout, frame: FrameData, theme: RenderTheme): void {
+  const { centreX, stageY, stageHalfHeight, stageHalfWidth } = layout;
+  const left = centreX - stageHalfWidth;
+  const levels = resampleWave(frame.wave, WAVE_POINTS);
+  const minAmplitude = Math.max(2.5, stageHalfHeight * 0.03);
+  const buildPath = () => waveOutline(ctx, layout, levels, stageHalfHeight, minAmplitude);
 
   // Upcoming audio: quiet.
   ctx.save();
@@ -308,32 +421,36 @@ function paintWave(ctx: Ctx2D, layout: Layout, frame: FrameData, theme: RenderTh
   // Already-played audio: accent, clipped to the left of the playhead.
   ctx.save();
   ctx.beginPath();
-  ctx.rect(margin, stageY - stageHalfHeight - 20, centreX - margin, stageHalfHeight * 2 + 40);
+  ctx.rect(left, stageY - stageHalfHeight - 20, centreX - left, stageHalfHeight * 2 + 40);
   ctx.clip();
   buildPath();
   ctx.fillStyle = rgba(theme.accent, 0.92);
   ctx.fill();
   ctx.restore();
 
-  // Playhead.
+  // Playhead. Thinner than the wave is tall on purpose: it marks the position, and a
+  // heavy bar through a smaller stage reads as a second element.
+  const capY = stageY - stageHalfHeight - 22;
   ctx.save();
   ctx.fillStyle = rgba(theme.fg, 0.9);
-  roundedRect(ctx, centreX - 2.5, stageY - stageHalfHeight - 34, 5, stageHalfHeight * 2 + 68, 3);
+  roundedRect(ctx, centreX - 1.5, capY, 3, stageHalfHeight * 2 + 34, 1.5);
   ctx.fill();
-  const dotRadius = 9 + frame.level * 7;
+  const dotRadius = 6 + frame.level * 5;
   ctx.beginPath();
-  ctx.arc(centreX, stageY - stageHalfHeight - 34, dotRadius, 0, Math.PI * 2);
+  ctx.arc(centreX, capY, dotRadius, 0, Math.PI * 2);
   ctx.fillStyle = rgba(theme.accent, 0.95);
   ctx.fill();
   ctx.restore();
 }
 
 function paintBars(ctx: Ctx2D, layout: Layout, frame: FrameData, theme: RenderTheme): void {
-  const { margin, width, stageY, stageHalfHeight, barGap: gap } = layout;
-  const usable = width - margin * 2;
-  const barWidth = (usable - gap * (BAND_COUNT - 1)) / BAND_COUNT;
+  const { centreX, stageY, stageHalfHeight, stageHalfWidth, barGap: gap } = layout;
+  const usable = stageHalfWidth * 2;
+  const left = centreX - stageHalfWidth;
+  const barWidth = (usable - gap * (BAR_COUNT - 1)) / BAR_COUNT;
   const radius = barWidth / 2;
-  const minHeight = barWidth * 0.9;
+  const minHeight = barWidth * 0.85;
+  const perBar = BAND_COUNT / BAR_COUNT;
 
   const gradient = ctx.createLinearGradient(
     0,
@@ -347,10 +464,21 @@ function paintBars(ctx: Ctx2D, layout: Layout, frame: FrameData, theme: RenderTh
 
   ctx.save();
   ctx.fillStyle = gradient;
-  for (let b = 0; b < BAND_COUNT; b++) {
-    const magnitude = frame.bands[b] ?? 0;
+  for (let b = 0; b < BAR_COUNT; b++) {
+    // Average the analysis bands that land in this bar rather than dropping the ones
+    // with no bar of their own. A mean moves with the whole group, which is what makes
+    // the row read as smooth without carrying any state between frames.
+    const start = Math.floor(b * perBar);
+    const end = Math.max(start + 1, Math.floor((b + 1) * perBar));
+    let sum = 0;
+    let count = 0;
+    for (let i = start; i < end && i < BAND_COUNT; i++) {
+      sum += frame.bands[i] ?? 0;
+      count += 1;
+    }
+    const magnitude = count > 0 ? sum / count : 0;
     const half = Math.max(minHeight / 2, magnitude * stageHalfHeight);
-    const x = margin + b * (barWidth + gap);
+    const x = left + b * (barWidth + gap);
     roundedRect(ctx, x, stageY - half, barWidth, half * 2, radius);
     ctx.fill();
   }
@@ -359,7 +487,35 @@ function paintBars(ctx: Ctx2D, layout: Layout, frame: FrameData, theme: RenderTh
   // Centre hairline ties the bars together and marks silence.
   ctx.save();
   ctx.fillStyle = rgba(theme.fg, 0.2);
-  ctx.fillRect(margin, stageY - 1, usable, 2);
+  ctx.fillRect(left, stageY - 1, usable, 2);
+  ctx.restore();
+}
+
+/**
+ * Minimal pulse: one thin line, low, soft and held at about a third of the opacity the
+ * other two modes carry.
+ *
+ * It is the same outline as the waveform at a fraction of the amplitude, with no
+ * playhead, no played/unplayed split and no second colour — every one of those is
+ * another thing in the frame, and the point of this mode is that there is almost
+ * nothing in the frame. Filling and stroking the one path is what rounds the peaks:
+ * the stroke's round joins sit over the fill's corners.
+ */
+function paintPulse(ctx: Ctx2D, layout: Layout, frame: FrameData, theme: RenderTheme): void {
+  const half = pulseHalfHeight(layout);
+  const levels = resampleWave(frame.wave, WAVE_POINTS);
+  const thickness = Math.max(2.5, half * 0.14);
+
+  ctx.save();
+  ctx.globalAlpha = PULSE_OPACITY;
+  waveOutline(ctx, layout, levels, half, thickness);
+  ctx.fillStyle = rgba(theme.fg, 0.95);
+  ctx.fill();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.lineWidth = thickness;
+  ctx.strokeStyle = rgba(theme.fg, 0.95);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -480,6 +636,353 @@ function paintChrome(
   ctx.restore();
 }
 
+// --- reserved space -------------------------------------------------------
+
+/**
+ * The boxes the overlays have to work around.
+ *
+ * Every element that cannot move — the logo row, the animation, the watermark — is
+ * measured as a rectangle, and the two that can move are placed into what is left: the
+ * picture window first, then the headline in the column beside it, then subtitles
+ * carved against both. Fixing that order is what makes "nothing overlaps" a property
+ * of the layout rather than something to check afterwards, in all three formats.
+ */
+
+/** The top row: logo (or the drawn wordmark), the duration clock and the rule. */
+function topChromeRect(layout: Layout, spec: RenderSpec): Rect {
+  const markTop = layout.wordmarkY - layout.wordmarkSize;
+  const top = Math.min(spec.logo ? logoBox(layout, spec.logo).y : markTop, markTop) - 10;
+  return { x: 0, y: top, width: layout.width, height: layout.ruleY + 12 - top };
+}
+
+/**
+ * What the animation occupies, or null for `none` — in which case the space is genuinely
+ * free and the picture window is welcome to all of it.
+ *
+ * Taller above than below for the waveform, because the playhead's cap and its dot sit
+ * over the top of the stage and nothing sits under it.
+ */
+function stageRect(layout: Layout, spec: RenderSpec): Rect | null {
+  if (spec.animation === 'none') return null;
+  const half = spec.animation === 'pulse' ? pulseHalfHeight(layout) : layout.stageHalfHeight;
+  const above = spec.animation === 'wave' ? half + 34 : half + 8;
+  const below = half + 8;
+  return {
+    x: layout.centreX - layout.stageHalfWidth,
+    y: layout.stageY - above,
+    width: layout.stageHalfWidth * 2,
+    height: above + below,
+  };
+}
+
+// --- picture window -------------------------------------------------------
+
+/**
+ * The podcast inset: artwork, cropped to its shape, with a border and a soft shadow.
+ *
+ * Cover-fit, so the image is scaled to fill the square and centred — the crop takes the
+ * overflow rather than the aspect ratio being bent to fit, which is why a portrait
+ * photo comes out as a portrait photo with its sides trimmed and never as a stretched
+ * one. The shape is a clip path, so the circle is a true circle and the rounded corners
+ * are curves rather than a mask drawn over the top.
+ */
+function paintPicture(
+  ctx: Ctx2D,
+  spec: RenderSpec,
+  theme: RenderTheme,
+  plan: PicturePlan,
+  image: CanvasImageSource,
+): void {
+  const { x, y, width, height, radius } = plan;
+
+  // Shadow first, on a plate of its own: cast off the artwork it would be re-cast on
+  // every stroke, and cast off the clip path it would not appear at all.
+  ctx.save();
+  ctx.shadowColor = 'rgba(4, 6, 9, 0.42)';
+  ctx.shadowBlur = width * 0.11;
+  ctx.shadowOffsetY = width * 0.035;
+  ctx.fillStyle = theme.light ? 'rgba(20, 24, 29, 0.24)' : 'rgba(4, 6, 9, 0.5)';
+  roundedRect(ctx, x, y, width, height, radius);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.save();
+  roundedRect(ctx, x, y, width, height, radius);
+  ctx.clip();
+  const size = imageSize(image);
+  if (size && size.width > 0 && size.height > 0) {
+    const scale = Math.max(width / size.width, height / size.height);
+    const w = size.width * scale;
+    const h = size.height * scale;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(image, x + (width - w) / 2, y + (height - h) / 2, w, h);
+  } else {
+    // An image whose size cannot be read is not drawn as a hole in the frame.
+    ctx.fillStyle = rgba(theme.fg, 0.12);
+    ctx.fillRect(x, y, width, height);
+  }
+  ctx.restore();
+
+  // Border, inside the shape so the stroke is not half-clipped away.
+  const strokeWidth = Math.max(2, width * 0.012);
+  ctx.save();
+  ctx.lineWidth = strokeWidth;
+  ctx.strokeStyle = rgba(theme.light ? '#0D0F12' : '#F6F1E7', theme.light ? 0.34 : 0.42);
+  roundedRect(
+    ctx,
+    x + strokeWidth / 2,
+    y + strokeWidth / 2,
+    width - strokeWidth,
+    height - strokeWidth,
+    Math.max(0, radius - strokeWidth / 2),
+  );
+  ctx.stroke();
+  ctx.restore();
+}
+
+// --- headline -------------------------------------------------------------
+
+interface HeadlinePlan {
+  /** Every line of the full text, wrapped. The typewriter reveals characters of these. */
+  lines: string[];
+  fontSize: number;
+  lineHeight: number;
+  intro: HeadlineIntro;
+  x: number;
+  width: number;
+  top: number;
+  bottom: number;
+  padX: number;
+  padY: number;
+  accentWidth: number;
+  /**
+   * How far left of `x` a Slide In entrance may start, in frame units.
+   *
+   * Zero when the picture window is against the headline's leading edge: the block would
+   * have to travel across the artwork to arrive, so it arrives without travelling and the
+   * entrance reads as the fade the opacity ramp is already doing. Nothing about the frame
+   * is allowed to move over the window.
+   */
+  slide: number;
+}
+
+/** A row the headline could be set on: a top edge and the column free at that height. */
+interface HeadlineBand {
+  top: number;
+  left: number;
+  right: number;
+}
+
+/** The text set into `column`, shrinking until it takes two lines or the attempts run out. */
+function fitHeadline(
+  ctx: Ctx2D,
+  layout: Layout,
+  spec: RenderSpec,
+  text: string,
+  column: number,
+): { fontSize: number; lines: string[]; fits: boolean } {
+  let fontSize = layout.headlineSize;
+  let lines: string[] = [];
+  let fits = false;
+  for (let attempt = 0; attempt < 7; attempt++) {
+    fontSize = layout.headlineSize * Math.pow(0.9, attempt);
+    ctx.font = `600 ${fontSize}px ${spec.fonts.sans}`;
+    const wrapped = wrapText(ctx, text, column - fontSize * 0.46 * 2, 0);
+    lines = wrapped.slice(0, 2);
+    // One or two lines, never three: the rest of the frame is budgeted around that.
+    if (wrapped.length <= 2) {
+      fits = true;
+      break;
+    }
+  }
+  return { fontSize, lines, fits };
+}
+
+/**
+ * The rows the headline may be set on, topmost first.
+ *
+ * The first is always the format's own headline row, narrowed to whatever column the
+ * blocking boxes leave at that height. After that comes one row under each box that was
+ * in the way — a top-corner picture window or watermark takes the row it sits on, and the
+ * headline reads better on the full width below it than squeezed into the strip beside it.
+ */
+function headlineBands(layout: Layout, blocked: Rect[], maxHeight: number): HeadlineBand[] {
+  const tops = [layout.headlineTop];
+  for (const rect of blocked) {
+    const bottom = rect.y + rect.height;
+    if (bottom > layout.headlineTop && !tops.some((top) => Math.abs(top - bottom) < 1)) {
+      tops.push(bottom);
+    }
+  }
+  tops.sort((a, b) => a - b);
+
+  return tops.map((top) => {
+    let left = layout.safe.left;
+    let right = layout.width - layout.safe.right;
+    for (const rect of blocked) {
+      if (rect.y >= top + maxHeight || rect.y + rect.height <= top) continue;
+      if (rect.x + rect.width / 2 < layout.centreX) {
+        left = Math.max(left, rect.x + rect.width);
+      } else {
+        right = Math.min(right, rect.x);
+      }
+    }
+    return { top, left, right };
+  });
+}
+
+/**
+ * Measure the headline block.
+ *
+ * Measured from the **whole** text, always, even when the typewriter has only revealed
+ * three characters of it: a panel that grew as the letters arrived would push the frame
+ * around for the first two seconds of every video. The line breaks are therefore also
+ * decided once, and the reveal walks through them.
+ *
+ * The picture window and the watermark are placed first and this yields to both: it takes
+ * the topmost row where the whole topic still sets in two lines, dropping below a box in
+ * its way rather than beside it when the strip beside it is too narrow to read. It is the
+ * element that can reflow, so it is the one that moves. `ceiling` is the lowest its panel
+ * may reach — the animation stage, or the progress rail when there is no stage — and a
+ * topic with nowhere left above that is left off the frame rather than drawn over
+ * something.
+ */
+function planHeadline(
+  ctx: Ctx2D,
+  layout: Layout,
+  spec: RenderSpec,
+  elapsed: number,
+  blocked: Rect[],
+  ceiling: number,
+): HeadlinePlan | null {
+  const settings = spec.headline;
+  if (!settings) return null;
+  const text = headlineText(settings);
+  if (!text) return null;
+
+  // The tallest the block could possibly be — two lines at full size, plus padding.
+  // Used only to ask which boxes are in the way, so it errs on the generous side.
+  const maxHeight = layout.headlineSize * (1.2 * 2 + 0.6);
+  // Narrower than a third of the frame and a headline is a column of single words.
+  const minColumn = layout.width * 0.3;
+
+  let chosen: { band: HeadlineBand; fontSize: number; lines: string[] } | null = null;
+  for (const band of headlineBands(layout, blocked, maxHeight)) {
+    const column = band.right - band.left;
+    if (column < minColumn) continue;
+    const fit = fitHeadline(ctx, layout, spec, text, column);
+    if (fit.lines.length === 0) continue;
+    const bottom = band.top + fit.lines.length * fit.fontSize * 1.2 + fit.fontSize * 0.3 * 2;
+    if (bottom > ceiling) continue;
+    // The first row that takes the text whole wins; a row that only takes it truncated is
+    // held as a fallback in case no better one turns up further down.
+    if (fit.fits) {
+      chosen = { band, fontSize: fit.fontSize, lines: fit.lines };
+      break;
+    }
+    chosen ??= { band, fontSize: fit.fontSize, lines: fit.lines };
+  }
+  // Nowhere to set it on this frame. Better left off than set unreadably or over the
+  // window: the topic is one element among several, and the others were here first.
+  if (!chosen) return null;
+
+  const { band, fontSize, lines } = chosen;
+  const padX = fontSize * 0.46;
+  const padY = fontSize * 0.3;
+  const lineHeight = fontSize * 1.2;
+  ctx.font = `600 ${fontSize}px ${spec.fonts.sans}`;
+  const widest = lines.reduce((max, line) => Math.max(max, trackedWidth(ctx, line, 0)), 0);
+  const blockedFromLeft = band.left > layout.safe.left;
+
+  return {
+    lines,
+    fontSize,
+    lineHeight,
+    intro: headlineIntro(settings.animation, text, elapsed),
+    x: band.left,
+    // The panel hugs the text rather than running the whole column, so a three-word
+    // topic reads as a label and not as an empty bar.
+    width: Math.min(band.right - band.left, widest + padX * 2),
+    top: band.top,
+    bottom: band.top + lines.length * lineHeight + padY * 2,
+    padX,
+    padY,
+    accentWidth: Math.max(3, fontSize * 0.08),
+    // Far enough to read as an entrance, and never further than the frame edge.
+    slide: blockedFromLeft ? 0 : Math.min(layout.headlineSize * 1.6, band.left),
+  };
+}
+
+/** Reveal `shown` characters across pre-wrapped lines, counting the spaces the wrap ate. */
+function revealLines(lines: string[], shown: number): string[] {
+  let remaining = shown;
+  return lines.map((line) => {
+    const chars = [...line];
+    const visible = remaining <= 0 ? '' : chars.slice(0, remaining).join('');
+    remaining -= chars.length + 1;
+    return visible;
+  });
+}
+
+/**
+ * The topic, on a quiet panel with an accent rule down its leading edge.
+ *
+ * The panel is there because the headline has to survive an uploaded photo behind it;
+ * it is translucent because at full opacity it becomes a title bar and the video starts
+ * to look like a slide. Set in `fonts.sans` — Inter, the one face in the app with
+ * Cyrillic in it — for the same reason the subtitles are: a Bulgarian topic in a
+ * Latin-only face is fallback glyphs in the exported file.
+ */
+function paintHeadline(
+  ctx: Ctx2D,
+  spec: RenderSpec,
+  theme: RenderTheme,
+  plan: HeadlinePlan,
+): void {
+  const { intro, fontSize, lineHeight, padX, padY } = plan;
+  const opacity = Math.min(1, Math.max(0, intro.opacity));
+  if (opacity <= 0.01) return;
+
+  const typing = spec.headline?.animation === 'typewriter';
+  const visible = typing ? revealLines(plan.lines, [...intro.text].length) : plan.lines;
+
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  // `intro.offset` is a fraction of the travel this frame can spare, so a headline hemmed
+  // in by the picture window (slide 0) settles in place instead of crossing it.
+  ctx.translate(intro.offset * plan.slide, 0);
+
+  const height = plan.bottom - plan.top;
+  ctx.fillStyle = rgba(theme.light ? '#FFFFFF' : '#05070A', theme.light ? 0.4 : 0.34);
+  roundedRect(ctx, plan.x, plan.top, plan.width, height, fontSize * 0.22);
+  ctx.fill();
+
+  ctx.fillStyle = rgba(theme.accent, 0.92);
+  roundedRect(ctx, plan.x, plan.top, plan.accentWidth, height, plan.accentWidth / 2);
+  ctx.fill();
+
+  ctx.font = `600 ${fontSize}px ${spec.fonts.sans}`;
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = rgba(theme.light ? '#0D0F12' : '#F6F1E7', 0.96);
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+  ctx.shadowBlur = fontSize * 0.16;
+
+  let cursor = plan.top + padY;
+  visible.forEach((line, index) => {
+    const baseline = cursor + lineHeight * 0.78;
+    drawTracked(ctx, line, plan.x + padX, baseline, 0, 'left');
+    // Caret on the last line with anything on it, while the typewriter is still going.
+    const isLast = index === visible.length - 1 || visible[index + 1] === '';
+    if (intro.typing && isLast && line.length > 0) {
+      const caretX = plan.x + padX + trackedWidth(ctx, line, 0) + fontSize * 0.08;
+      ctx.fillRect(caretX, baseline - fontSize * 0.74, Math.max(2, fontSize * 0.06), fontSize * 0.8);
+    }
+    cursor += lineHeight;
+  });
+  ctx.restore();
+}
+
 // --- subtitles ------------------------------------------------------------
 
 interface SubtitleLine {
@@ -506,14 +1009,54 @@ interface SubtitlePlan {
 }
 
 /**
+ * How far the progress rail and the timings are free to travel this frame.
+ *
+ * The rail moves out of the subtitles' way, but two other elements have already claimed
+ * space it would move into, so the limits are worked out once and handed to everyone who
+ * needs them: `subtitleRoom` sizes its slots against them, and `planFrame` clamps the
+ * shift it finally applies to the same two numbers. Deriving them twice is how the rail
+ * ends up on top of a watermark in one format and not another.
+ */
+interface ChromeLimits {
+  /** The furthest the rail may rise, as a negative shift. Set by the picture window. */
+  minShift: number;
+  /** The lowest the timings baseline may sit: the safe area, or a bottom watermark. */
+  floor: number;
+}
+
+function chromeLimits(
+  layout: Layout,
+  mark: { y: number; isTop: boolean } | null,
+  picture: Rect | null,
+): ChromeLimits {
+  let floor = layout.height - layout.safe.bottom - 24;
+  if (mark && !mark.isTop) {
+    // Clear of the mark, with the descenders of the timings taken into account.
+    floor = Math.min(floor, mark.y - layout.gap - layout.timeSize * 0.24);
+  }
+  const minShift = picture
+    ? Math.min(0, picture.y + picture.height + layout.gap - layout.railY)
+    : Number.NEGATIVE_INFINITY;
+  return { minShift, floor };
+}
+
+/**
  * The vertical space a subtitle position may use, once the chrome has moved as far
  * as it is allowed to.
  *
  * `bottom` sits under the timings, `middle` between the animation and the rail,
  * `top` between the rule and the animation. None of the three can reach the
  * waveform, which is the requirement: subtitles must not cover it.
+ *
+ * Both ends are the chrome's travel and not the frame's: a block placed as though the
+ * rail could rise, when a picture window in a bottom corner is holding it down, is a
+ * block with the rail through it.
  */
-function subtitleRoom(layout: Layout, position: SubtitlePosition): { top: number; bottom: number } {
+function subtitleRoom(
+  layout: Layout,
+  position: SubtitlePosition,
+  limits: ChromeLimits,
+): { top: number; bottom: number } {
   const stageBottom = layout.stageY + layout.stageHalfHeight;
   const clockGap = layout.timeY - layout.railY;
 
@@ -521,13 +1064,12 @@ function subtitleRoom(layout: Layout, position: SubtitlePosition): { top: number
     return { top: layout.ruleY + 34, bottom: layout.stageY - layout.stageHalfHeight - 34 };
   }
   if (position === 'middle') {
-    // The rail may slide down to the edge of the safe area, no further.
-    const maxTimeY = layout.height - layout.safe.bottom - 24;
-    const maxRailY = Math.max(layout.railY, maxTimeY - clockGap);
+    // The rail may slide down as far as the limits allow, no further.
+    const maxRailY = Math.max(layout.railY, limits.floor - clockGap);
     return { top: stageBottom + 30, bottom: maxRailY - 30 };
   }
-  // The rail may slide up until it would touch the animation.
-  const minRailY = stageBottom + 40;
+  // The rail may slide up until it would touch the animation or the picture window.
+  const minRailY = Math.max(stageBottom + 40, layout.railY + limits.minShift);
   const minTimeY = Math.min(layout.timeY, minRailY + clockGap);
   return { top: minTimeY + 46, bottom: layout.height - layout.safe.bottom };
 }
@@ -615,6 +1157,80 @@ function fitSubtitleText(
 }
 
 /**
+ * A candidate slot for the subtitle block: how much height it has, and the column it
+ * may set type in.
+ */
+interface SubtitlePlacement {
+  room: { top: number; bottom: number };
+  boxWidth: number;
+  boxLeft: number;
+}
+
+/**
+ * Take the picture window and the headline out of a subtitle slot.
+ *
+ * Each obstruction can be escaped two ways — hand back the strip it shares vertically,
+ * or the column it shares horizontally — and whichever leaves more area to set type in
+ * wins, except that a column narrower than half of what we started with is refused
+ * outright: wrapping a sentence into a gutter costs more than the height ever saves.
+ *
+ * The vertical cut leans towards the side the position asked for, so a bottom subtitle
+ * gives up the space above the obstruction rather than below it. It is a lean and not a
+ * rule because the obstruction can be at the very edge the position wants: top subtitles
+ * with a headline under them have a ten-pixel sliver above it and the rest of the frame
+ * below, and a block held to the sliver would be a clipped line rather than a subtitle.
+ *
+ * `allowHorizontal` is false for the band style, whose backdrop is drawn the full width
+ * of the frame — moving that block into a column beside the picture window would leave
+ * the text clear of the artwork and the band still lying across it.
+ */
+function carvePlacement(
+  placement: SubtitlePlacement,
+  reserved: Rect[],
+  position: SubtitlePosition,
+  allowHorizontal: boolean,
+): SubtitlePlacement {
+  let { top, bottom } = placement.room;
+  let left = placement.boxLeft;
+  let right = placement.boxLeft + placement.boxWidth;
+  const minWidth = placement.boxWidth * 0.5;
+
+  for (const rect of reserved) {
+    const rectRight = rect.x + rect.width;
+    const rectBottom = rect.y + rect.height;
+    if (left >= rectRight || right <= rect.x || top >= rectBottom || bottom <= rect.y) continue;
+
+    const above = Math.max(0, rect.y - top);
+    const below = Math.max(0, bottom - rectBottom);
+    // 1.5 for a top subtitle, its reciprocal for a bottom one: the preferred side wins
+    // unless the other is half again as tall, which only happens when the obstruction is
+    // sitting on the edge the position asked for.
+    const bias = position === 'top' ? 1.5 : position === 'bottom' ? 1 / 1.5 : 1;
+    const keepAbove = above * bias >= below;
+    const height = keepAbove ? above : below;
+
+    const leftSpace = Math.max(0, rect.x - left);
+    const rightSpace = Math.max(0, right - rectRight);
+    const keepLeft = leftSpace >= rightSpace;
+    const width = keepLeft ? leftSpace : rightSpace;
+
+    const verticalArea = height * (right - left);
+    const horizontalArea = (bottom - top) * width;
+
+    if (allowHorizontal && width >= minWidth && horizontalArea > verticalArea) {
+      if (keepLeft) right = left + width;
+      else left = right - width;
+    } else if (keepAbove) {
+      bottom = top + height;
+    } else {
+      top = bottom - height;
+    }
+  }
+
+  return { room: { top, bottom }, boxLeft: left, boxWidth: Math.max(0, right - left) };
+}
+
+/**
  * Decide what the subtitle block looks like this frame, or return null when there
  * is nothing to show.
  *
@@ -627,12 +1243,18 @@ function fitSubtitleText(
  * alone, then — where a short format leaves no band to spare — the full height in
  * the column beside it. Only if neither holds does the block take the space anyway,
  * which is the least bad of three bad options.
+ *
+ * `reserved` carries whatever else has already claimed space — the picture window, the
+ * headline — and every candidate is carved against it, so the block is fitted into what
+ * is actually free rather than being placed and then found to be on top of something.
  */
 function planSubtitles(
   ctx: Ctx2D,
   layout: Layout,
   spec: RenderSpec,
   elapsed: number,
+  reserved: Rect[],
+  limits: ChromeLimits,
 ): SubtitlePlan | null {
   const subtitles = spec.subtitles;
   if (!subtitles) return null;
@@ -651,7 +1273,7 @@ function planSubtitles(
   const style = resolveSubtitleStyle(settings);
   // Two lines on screen at once, total. Bilingual therefore gets one line each.
   const maxLinesPerBlock = blocks.length > 1 ? 1 : 2;
-  const room = subtitleRoom(layout, settings.position);
+  const room = subtitleRoom(layout, settings.position, limits);
 
   const safeLeft = layout.safe.left;
   const safeRight = layout.width - layout.safe.right;
@@ -665,16 +1287,10 @@ function planSubtitles(
     ((mark.isTop && settings.position === 'top') ||
       (!mark.isTop && settings.position === 'bottom'));
 
-  interface Placement {
-    room: { top: number; bottom: number };
-    boxWidth: number;
-    boxLeft: number;
-  }
-
-  const placements: Placement[] = [];
+  const raw: SubtitlePlacement[] = [];
   if (shares && mark) {
     const gap = mark.size * 0.55;
-    placements.push({
+    raw.push({
       room:
         settings.position === 'top'
           ? { top: Math.max(room.top, mark.y + mark.height + gap), bottom: room.bottom }
@@ -685,18 +1301,25 @@ function planSubtitles(
 
     // Beside the mark: only worth offering while the column left over is wide
     // enough to read in. Narrower than half the safe area and the wrapping costs
-    // more than the overlap would.
+    // more than the overlap would. Never offered to the band style, whose backdrop is
+    // drawn the full width of the frame and would lie across the mark from any column.
     const markLeft = mark.x;
     const markRight = mark.x + mark.width;
     const columnLeft = markLeft > layout.width / 2 ? safeLeft : markRight + gap;
     const columnRight = markLeft > layout.width / 2 ? markLeft - gap : safeRight;
     const columnWidth = Math.min(layout.subtitleMaxWidth, columnRight - columnLeft);
-    if (columnWidth >= available * 0.5) {
-      placements.push({ room, boxWidth: columnWidth, boxLeft: columnLeft });
+    if (style.backdrop !== 'band' && columnWidth >= available * 0.5) {
+      raw.push({ room, boxWidth: columnWidth, boxLeft: columnLeft });
     }
   } else {
-    placements.push({ room, boxWidth: fullWidth, boxLeft: centred(fullWidth) });
+    raw.push({ room, boxWidth: fullWidth, boxLeft: centred(fullWidth) });
   }
+
+  // The window and the headline are already placed, so they are a constraint here
+  // rather than a candidate to weigh: every slot is carved before it is measured.
+  const placements = raw.map((placement) =>
+    carvePlacement(placement, reserved, settings.position, style.backdrop !== 'band'),
+  );
 
   let chosen = placements[0];
   let attempt = fitSubtitleText(
@@ -901,7 +1524,12 @@ function watermarkBox(
 
   return {
     x: isLeft ? layout.safe.left : layout.width - layout.safe.right - width,
-    y: isTop ? layout.safe.top : layout.height - layout.safe.bottom - m.height,
+    // A top corner is measured from below the rule rather than from the safe inset:
+    // in Story the platform's safe top lands inside the logo row, and a mark with the
+    // hairline running through it is a covered mark.
+    y: isTop
+      ? Math.max(layout.safe.top, layout.ruleY + layout.gap)
+      : layout.height - layout.safe.bottom - m.height,
     width,
     height: m.height,
     size: m.size,
@@ -969,8 +1597,183 @@ function paintWatermark(ctx: Ctx2D, layout: Layout, spec: RenderSpec, theme: Ren
 }
 
 /**
+ * Everything the frame has decided about where things go, before anything is drawn.
+ *
+ * Split out of `drawFrame` so the layout can be asserted rather than eyeballed: it is a
+ * pure function of the format, the settings and the elapsed second, and it is the same
+ * function the preview and the encoder run. `scripts/check-frame-layout.mjs` walks it
+ * across every combination of format, motion, window and subtitle mode and fails the
+ * build if two boxes touch — see `frameBoxes`.
+ */
+interface FramePlan {
+  layout: Layout;
+  /** The logo row and the rule under it. Fixed. */
+  chrome: Rect;
+  /** What the motion occupies, or null for `none`. Fixed. */
+  stage: Rect | null;
+  picture: PicturePlan | null;
+  headline: HeadlinePlan | null;
+  subtitles: SubtitlePlan | null;
+  /** The attribution mark, or null in the impossible case of it being switched off. */
+  watermark: Rect | null;
+  /** How far the progress rail and the timings move to keep out of the way. */
+  chromeShift: number;
+}
+
+function planFrame(ctx: Ctx2D, layout: Layout, spec: RenderSpec, elapsed: number): FramePlan {
+  // The picture window goes into the largest corner nothing else has claimed. The band it
+  // may use starts under the logo row and stops above the progress rail, so it can never
+  // reach either; the motion and the watermark are passed in as boxes to avoid, so it
+  // cannot reach those either.
+  const chrome = topChromeRect(layout, spec);
+  const mark = watermarkBox(ctx, layout, spec);
+  const stage = stageRect(layout, spec);
+  const blocked: Rect[] = [];
+  if (stage) blocked.push(padRect(stage, layout.gap));
+  if (mark) blocked.push(padRect(mark, layout.gap));
+
+  const picture =
+    spec.picture?.image
+      ? planPicture({
+          layout,
+          settings: spec.picture.settings,
+          blocked,
+          band: {
+            top: Math.max(chrome.y + chrome.height + layout.gap, layout.safe.top),
+            bottom: Math.min(layout.railY - layout.gap, layout.height - layout.safe.bottom),
+          },
+        })
+      : null;
+  if (picture) blocked.push(padRect(picture, layout.gap));
+
+  // The headline takes the topmost row the window and the mark leave it, re-wrapping into
+  // what is left. Its floor is the animation stage, or the rail when there is no stage.
+  const headline = planHeadline(
+    ctx,
+    layout,
+    spec,
+    elapsed,
+    blocked,
+    (stage ? stage.y : layout.railY) - layout.gap,
+  );
+
+  const limits = chromeLimits(layout, mark, picture);
+
+  // Subtitles are measured before the chrome is drawn so the chrome can move out of
+  // their way instead of overlapping them.
+  const reserved: Rect[] = [];
+  if (picture) reserved.push(padRect(picture, layout.gap));
+  if (headline) {
+    reserved.push(
+      padRect(
+        {
+          x: headline.x,
+          y: headline.top,
+          width: headline.width,
+          height: headline.bottom - headline.top,
+        },
+        layout.gap,
+      ),
+    );
+  }
+  const subtitles = planSubtitles(ctx, layout, spec, elapsed, reserved, limits);
+
+  // The chrome yields to the subtitles, within the travel it was given: it may not rise
+  // into the picture window, and it may not descend onto the watermark.
+  const wanted = subtitles?.chromeShift ?? 0;
+  const ceiling = Math.max(limits.minShift, limits.floor - layout.timeY);
+  const chromeShift = Math.min(Math.max(wanted, limits.minShift), ceiling);
+
+  return { layout, chrome, stage, picture, headline, subtitles, watermark: mark, chromeShift };
+}
+
+/**
+ * The plan as plain named rectangles, in the position they are actually drawn.
+ *
+ * The headline's box carries its slide offset, so a check run a fraction of a second into
+ * the clip sees the block mid-entrance rather than where it will end up — the overlap a
+ * moving element causes is still an overlap.
+ *
+ * `insideSafeArea` is false for the three elements that are designed to reach past it:
+ * the logo row, which sits above the safe top by construction, the progress rail, which
+ * spans the frame at the page margin, and the band subtitle backdrop, which is drawn the
+ * full width on purpose. The text inside that band is reported separately and is held to
+ * the safe area like everything else.
+ */
+export interface FrameBox {
+  name: string;
+  rect: Rect;
+  insideSafeArea: boolean;
+}
+
+export function frameBoxes(ctx: Ctx2D, spec: RenderSpec, elapsed: number): FrameBox[] {
+  const layout = layoutFor(spec.format ?? DEFAULT_FORMAT);
+  const plan = planFrame(ctx, layout, spec, elapsed);
+  const boxes: FrameBox[] = [];
+
+  boxes.push({ name: 'logo', rect: plan.chrome, insideSafeArea: false });
+
+  // The rail, the playhead dot and the two timings, after the shift.
+  const railTop = layout.railY + plan.chromeShift - 8;
+  boxes.push({
+    name: 'progress',
+    rect: {
+      x: layout.margin,
+      y: railTop,
+      width: layout.width - layout.margin * 2,
+      height: layout.timeY + plan.chromeShift + layout.timeSize * 0.24 - railTop,
+    },
+    insideSafeArea: false,
+  });
+
+  if (plan.stage) boxes.push({ name: 'motion', rect: plan.stage, insideSafeArea: true });
+  if (plan.picture) {
+    const { x, y, width, height } = plan.picture;
+    boxes.push({ name: 'picture', rect: { x, y, width, height }, insideSafeArea: true });
+  }
+  if (plan.headline) {
+    const h = plan.headline;
+    boxes.push({
+      name: 'headline',
+      rect: {
+        x: h.x + h.intro.offset * h.slide,
+        y: h.top,
+        width: h.width,
+        height: h.bottom - h.top,
+      },
+      // Where it comes to rest is held to the safe area; the entrance is allowed to
+      // start out in the page margin, which is what makes it read as an entrance.
+      insideSafeArea: h.intro.offset === 0,
+    });
+  }
+  if (plan.subtitles) {
+    const s = plan.subtitles;
+    const height = s.bottom - s.top;
+    boxes.push({
+      name: 'subtitles',
+      rect: { x: s.boxLeft, y: s.top, width: s.boxRight - s.boxLeft, height },
+      insideSafeArea: true,
+    });
+    if (s.style.backdrop === 'band') {
+      boxes.push({
+        name: 'subtitle-band',
+        rect: { x: 0, y: s.top, width: layout.width, height },
+        insideSafeArea: false,
+      });
+    }
+  }
+  if (plan.watermark) boxes.push({ name: 'watermark', rect: plan.watermark, insideSafeArea: true });
+
+  return boxes;
+}
+
+/**
  * Paint one frame. `scale` maps the format's design space onto the target canvas,
  * so a 405px-wide preview of a 1080-wide format passes `0.375`.
+ *
+ * The order below is the stacking order, which is why the watermark is painted last of
+ * the overlays — nothing can be drawn over the attribution. Where each element goes is
+ * `planFrame`'s answer, not this function's.
  */
 export function drawFrame(
   ctx: Ctx2D,
@@ -993,12 +1796,16 @@ export function drawFrame(
   // omits it for exactly the same reason the preview does.
   if (spec.animation === 'wave') paintWave(ctx, layout, frame, theme);
   else if (spec.animation === 'bars') paintBars(ctx, layout, frame, theme);
+  else if (spec.animation === 'pulse') paintPulse(ctx, layout, frame, theme);
 
-  // Subtitles are measured before the chrome is drawn so the chrome can move out
-  // of their way instead of overlapping them.
-  const plan = planSubtitles(ctx, layout, spec, frame.elapsed);
-  paintChrome(ctx, layout, frame, spec, theme, plan?.chromeShift ?? 0);
-  if (plan) paintSubtitles(ctx, layout, spec, plan);
+  const plan = planFrame(ctx, layout, spec, frame.elapsed);
+
+  const pictureImage = spec.picture?.image ?? null;
+  if (plan.picture && pictureImage) paintPicture(ctx, spec, theme, plan.picture, pictureImage);
+  if (plan.headline) paintHeadline(ctx, spec, theme, plan.headline);
+
+  paintChrome(ctx, layout, frame, spec, theme, plan.chromeShift);
+  if (plan.subtitles) paintSubtitles(ctx, layout, spec, plan.subtitles);
   paintWatermark(ctx, layout, spec, theme);
   paintGrain(ctx, layout, frameIndex);
 

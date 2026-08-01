@@ -5,12 +5,42 @@
  * Three aspect ratios means those numbers have to come from somewhere, and this is
  * that somewhere: one `Layout` object per format, resolved once per frame.
  *
- * The `story` layout reproduces the original constants exactly, down to the
- * vignette radius. That is deliberate — the vertical video is what GLASKO has
- * always produced, and adding formats must not quietly restyle it.
+ * The `story` layout keeps the original 9:16 proportions — margins, rule, rail and
+ * type scale — with one deliberate change: the animation stage is shorter and no
+ * longer runs the full width, so the waveform reads as one element in the frame
+ * rather than as the frame itself. The space that frees up is what the headline and
+ * the picture window are placed into, and none of it is hard-coded anywhere else.
  */
 
 export type FormatId = 'story' | 'square' | 'landscape';
+
+/** An axis-aligned box in a format's own coordinate space. */
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** True when two boxes share any area. Touching edges do not count as overlap. */
+export function rectsOverlap(a: Rect, b: Rect): boolean {
+  return (
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
+  );
+}
+
+/** Grow a box by `amount` on every side — the clearance an element wants around it. */
+export function padRect(rect: Rect, amount: number): Rect {
+  return {
+    x: rect.x - amount,
+    y: rect.y - amount,
+    width: rect.width + amount * 2,
+    height: rect.height + amount * 2,
+  };
+}
 
 export interface VideoFormat {
   id: FormatId;
@@ -76,6 +106,14 @@ export interface Layout {
   /** Vertical centre of the waveform / bars. */
   stageY: number;
   stageHalfHeight: number;
+  /**
+   * Half-width of the animation stage, measured from `centreX`.
+   *
+   * The waveform and the bars used to run the full width between the margins. They
+   * are inset now, which is what leaves a column beside them for a picture window —
+   * see `lib/picture.ts`, which finds that column rather than being told about it.
+   */
+  stageHalfWidth: number;
   /** Gap between frequency bars. */
   barGap: number;
   railY: number;
@@ -98,6 +136,19 @@ export interface Layout {
   subtitleMaxWidth: number;
   /** Watermark type size for "Made with" / "GLASKO". */
   watermarkSize: number;
+  /** Top of the headline block. Below the rule, above everything else. */
+  headlineTop: number;
+  /** Headline type size before it shrinks to fit. */
+  headlineSize: number;
+  /**
+   * Clearance every overlay keeps from its neighbours.
+   *
+   * One number per format rather than a constant, because "close but not touching"
+   * is a different distance on a 1080-wide frame than on a 1920-wide one.
+   */
+  gap: number;
+  /** Side length a picture window asks for at each size step, before clamping. */
+  pictureSizes: { small: number; medium: number; large: number };
 }
 
 /**
@@ -128,7 +179,8 @@ export function layoutFor(format: VideoFormat): Layout {
       margin,
       centreX: width / 2,
       stageY: 560,
-      stageHalfHeight: 150,
+      stageHalfHeight: 92,
+      stageHalfWidth: 366,
       barGap: 9,
       railY: 800,
       timeY: 866,
@@ -142,6 +194,13 @@ export function layoutFor(format: VideoFormat): Layout {
       subtitleSize: 52,
       subtitleMaxWidth: width - margin * 2,
       watermarkSize: 30,
+      headlineTop: 232,
+      headlineSize: 52,
+      gap: 26,
+      // Smaller steps than the other two formats, and deliberately so: a square frame
+      // has one band clear of the animation, and these are the sizes that fit inside it.
+      // Asking for more would mean every step clamping to the same trimmed window.
+      pictureSizes: { small: 132, medium: 154, large: 174 },
     };
   }
 
@@ -154,8 +213,9 @@ export function layoutFor(format: VideoFormat): Layout {
       margin,
       centreX: width / 2,
       stageY: 546,
-      stageHalfHeight: 150,
-      barGap: 14,
+      stageHalfHeight: 92,
+      stageHalfWidth: 528,
+      barGap: 13,
       railY: 792,
       timeY: 858,
       wordmarkY: 150,
@@ -168,10 +228,14 @@ export function layoutFor(format: VideoFormat): Layout {
       subtitleSize: 50,
       subtitleMaxWidth: Math.round(width * 0.76),
       watermarkSize: 30,
+      headlineTop: 228,
+      headlineSize: 54,
+      gap: 28,
+      pictureSizes: { small: 180, medium: 236, large: 292 },
     };
   }
 
-  // Story: the original constants, unchanged.
+  // Story: the original 9:16 proportions, with the animation stage reduced.
   const margin = 92;
   return {
     format,
@@ -179,9 +243,10 @@ export function layoutFor(format: VideoFormat): Layout {
     height,
     margin,
     centreX: width / 2,
-    stageY: 900,
-    stageHalfHeight: 210,
-    barGap: 9,
+    stageY: 880,
+    stageHalfHeight: 112,
+    stageHalfWidth: 386,
+    barGap: 10,
     railY: 1268,
     timeY: 1338,
     wordmarkY: 226,
@@ -194,5 +259,9 @@ export function layoutFor(format: VideoFormat): Layout {
     subtitleSize: 58,
     subtitleMaxWidth: width - margin * 2,
     watermarkSize: 32,
+    headlineTop: 320,
+    headlineSize: 62,
+    gap: 28,
+    pictureSizes: { small: 208, medium: 272, large: 336 },
   };
 }

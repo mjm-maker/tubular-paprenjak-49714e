@@ -46,7 +46,7 @@ export default function ExportPanel({
   return (
     <section className="panel pb-2" aria-labelledby="step-export">
       <header className="mb-6 flex items-baseline gap-3">
-        <span className="step-index">07</span>
+        <span className="step-index">09</span>
         <h2 id="step-export" className="font-display text-2xl leading-none">
           Export
         </h2>

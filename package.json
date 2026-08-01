@@ -9,12 +9,14 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "subtitles:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-subtitle-sync.mjs",
+    "layout:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-frame-layout.mjs",
     "music:build": "node scripts/generate-music.js"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "@netlify/database": "^1.1.0",
+    "@netlify/identity": "^1.2.0",
     "drizzle-orm": "^1.0.0-beta.22",
     "mp4-muxer": "^5.2.1",
     "next": "^15.5.4",

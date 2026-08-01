@@ -126,7 +126,7 @@ export default function MusicPanel({
   return (
     <section className="panel" aria-labelledby="step-music">
       <header className="mb-6 flex items-baseline gap-3">
-        <span className="step-index">04</span>
+        <span className="step-index">06</span>
         <h2 id="step-music" className="font-display text-2xl leading-none">
           Background music
         </h2>

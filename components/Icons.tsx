@@ -285,6 +285,80 @@ export function StampIcon({ className = 'h-5 w-5' }: IconProps) {
   );
 }
 
+/** The picture window: a frame with an inset in its corner. */
+export function WindowIcon({ className = 'h-5 w-5' }: IconProps) {
+  return (
+    <svg
+      className={`${base} ${className}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="2.6" y="4.4" width="18.8" height="15.2" rx="2.2" />
+      <rect x="13.4" y="7.2" width="5.4" height="5.4" rx="1.4" />
+    </svg>
+  );
+}
+
+/** The topic line: a heavy rule over a lighter one. */
+export function HeadlineIcon({ className = 'h-5 w-5' }: IconProps) {
+  return (
+    <svg
+      className={`${base} ${className}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M4 7.5h16" strokeWidth="2.6" />
+      <path d="M4 12.5h11" strokeWidth="1.5" />
+      <path d="M4 16.8h7" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+/** An account. A head and shoulders, drawn as thin as the rest of the set. */
+export function UserIcon({ className = 'h-5 w-5' }: IconProps) {
+  return (
+    <svg
+      className={`${base} ${className}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="8.4" r="3.9" />
+      <path d="M4.6 20.2a7.4 7.4 0 0 1 14.8 0" />
+    </svg>
+  );
+}
+
+/** Leaving. An arrow out of an open door. */
+export function ExitIcon({ className = 'h-5 w-5' }: IconProps) {
+  return (
+    <svg
+      className={`${base} ${className}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M14.5 4.5h-8A1.5 1.5 0 0 0 5 6v12a1.5 1.5 0 0 0 1.5 1.5h8" />
+      <path d="M13 12h7" />
+      <path d="m17 8.5 3.5 3.5L17 15.5" />
+    </svg>
+  );
+}
+
 /** The GLASKO mark: three ascending bars. */
 export function BrandMark({ className = 'h-5 w-5' }: IconProps) {
   return (

@@ -67,7 +67,8 @@ export default function SiteFooter() {
       </div>
 
       <p className="label-mono mt-5">
-        Glasko · browser-only voice video · no account, your audio never leaves this device
+        Glasko · browser-only voice video · an account is optional, your video never leaves this
+        device
       </p>
     </footer>
   );

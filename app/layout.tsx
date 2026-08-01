@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { DM_Mono, Familjen_Grotesk, Instrument_Serif, Inter } from 'next/font/google';
+import AuthProvider from '@/components/AuthProvider';
 import './globals.css';
 
 const instrumentSerif = Instrument_Serif({
@@ -64,7 +65,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       className={`${instrumentSerif.variable} ${familjen.variable} ${dmMono.variable} ${inter.variable}`}
     >
       <body>
-        {children}
+        {/* Session state only. The editor does not read it: signed in, signed out or
+            Identity not enabled at all, every step of the video pipeline is the same. */}
+        <AuthProvider>{children}</AuthProvider>
         <div className="grain-overlay" aria-hidden="true" />
       </body>
     </html>

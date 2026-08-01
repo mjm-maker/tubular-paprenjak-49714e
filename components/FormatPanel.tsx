@@ -52,7 +52,7 @@ export default function FormatPanel({
   return (
     <section className="panel" aria-labelledby="step-format">
       <header className="mb-6 flex items-baseline gap-3">
-        <span className="step-index">06</span>
+        <span className="step-index">08</span>
         <h2 id="step-format" className="font-display text-2xl leading-none">
           Format &amp; branding
         </h2>

@@ -4,12 +4,13 @@
 
 GLASKO is a single-screen Next.js 15 App Router app (TypeScript, Tailwind CSS v4) whose video pipeline runs entirely in the browser. Video never leaves the device, and audio only does so for one opt-in feature: subtitles, where slices of the voice are sent to a server route to be transcribed. Everything else — mixing, waveform analysis, rendering, encoding — happens in the tab.
 
-- `app/page.tsx` is the only screen. It owns all state (audio source, background, animation, music selection and volumes, subtitle settings and cues, output format, watermark, export status, sharing) and composes the seven step panels plus the preview.
-- `components/` holds the presentational pieces: `SourcePanel` (record/upload), `BackgroundPanel`, `AnimationPanel`, `MusicPanel`, `SubtitlePanel`, `FormatPanel`, `ExportPanel`, `SharePanel`, `SiteFooter`, `PreviewStage`, `Icons`.
+- `app/page.tsx` is the only screen of the editor. It owns all state (audio source, background, animation, picture window and its artwork, headline, music selection and volumes, subtitle settings and cues, output format, watermark, export status, sharing) and composes the nine step panels plus the preview. It does **not** read the session: an account is additive, and the editor behaves identically signed in, signed out, or with Identity not enabled at all.
+- `components/` holds the presentational pieces: `SourcePanel` (record/upload), `BackgroundPanel`, `AnimationPanel`, `PicturePanel`, `HeadlinePanel`, `MusicPanel`, `SubtitlePanel`, `FormatPanel`, `ExportPanel`, `SharePanel`, `SiteFooter`, `PreviewStage`, `Icons`, plus the account trio `AuthProvider`, `AuthCard` and `AccountNav`.
 - `lib/` holds everything non-visual, and is where the real work lives (see below).
+- `app/signup`, `app/login`, `app/forgot-password`, `app/reset-password` and `app/account` are the only routes other than the editor.
 - `app/api/visitors/route.ts`, `app/api/transcribe/route.ts` and `app/api/translate/route.ts` are the only server endpoints.
 
-The step order is the editing flow and is deliberate: voice → background → animation → music → subtitles → format and branding → export → share. Nothing later in the list invalidates anything earlier, which is why a new recording is the one action that clears the transcript.
+The step order is the editing flow and is deliberate: voice → background → animation → picture window → topic → music → subtitles → format and branding → export → share. Nothing later in the list invalidates anything earlier, which is why a new recording is the one action that clears the transcript.
 
 ### The rendering contract
 
@@ -27,8 +28,33 @@ The header logo and the in-frame logo are **not** the "Made with GLASKO" waterma
 
 `lib/layout.ts` is the single source of the three shapes and, through `layoutFor(format)`, of the safe area each one leaves for the platform's own buttons. Read positions out of it rather than hardcoding pixels: a subtitle block or watermark that is correct at 9:16 and clipped at 16:9 is the failure this file exists to prevent.
 
+### The frame plan
 
-Animation data is likewise shared. `lib/analysis.ts` precomputes, once per audio file, a per-frame amplitude level, 40 log-spaced frequency bands (via a hand-rolled radix-2 FFT — `AnalyserNode` is useless here because export runs faster than realtime), and a 240 Hz envelope for the waveform window. Both the preview loop and the encoder read frames out of that same array with `getFrameData`.
+Seven things now share the frame — logo row, headline, picture window, animation, progress line, subtitles, watermark — and none of them may touch. That is not enforced by eye or by per-format pixel tables. `planFrame` in `lib/render.ts` decides the whole arrangement **before anything is drawn**, in one fixed order, and each element is handed the boxes the earlier ones took:
+
+1. The fixed chrome: the logo row and rule (`topChromeRect`), the animation stage (`stageRect`) and the watermark (`watermarkBox`). These do not move, so they go first.
+2. The picture window, into the largest empty box anchored in the corner the user picked (`planPicture`, `lib/picture.ts`), searched against everything above and bounded by a band that stops short of the logo row and the progress rail.
+3. The headline, into the topmost row that is left (`planHeadline`), re-wrapping and shrinking to fit the column and dropping below a corner element rather than squeezing in beside it.
+4. The subtitles, carved against the window and the headline (`planSubtitles`, `carvePlacement`).
+5. The progress rail and timings, which are the one piece of chrome that yields: `chromeShift` slides them up or down out of the subtitles' way, clamped by `chromeLimits` so they can neither rise into the picture window nor descend onto the watermark.
+
+Two rules keep this honest. **Every value is a pure function of `(spec, elapsed)`** — the export renders frame 45 without having rendered frames 0 to 44, so a layout that depended on the previous frame would work in the preview and not in the file. And **elements yield in one direction only**: the mark, the logo and the motion never move for anything, the window shrinks or changes corner, the headline reflows, the subtitles carve, the rail shifts. Adding an element means giving it a place in that order, not adding a special case.
+
+`frameBoxes(ctx, spec, elapsed)` returns the plan as named rectangles in the positions they are actually drawn, which is what makes the no-overlap requirement testable rather than aspirational: `npm run layout:check` (`scripts/check-frame-layout.mjs`) walks 28,860 combinations of format, motion, window corner and size, headline treatment, subtitle mode / position / style and watermark corner, at two moments each, and fails if any two boxes share a pixel, if anything leaves the frame or its safe area, if the watermark is ever missing, or if the headline is dropped from a frame that had room for it. Add a case there rather than loosening a tolerance. Anything new that is drawn in `drawFrame` needs a box in `frameBoxes`, or it is outside the guarantee.
+
+### Picture window and headline
+
+`lib/picture.ts` and `lib/headline.ts` own the two optional in-frame elements, and both are off by default.
+
+The window is never given a position in pixels — only a corner, a size step and a shape. `planPicture` finds the space; `cornerSpace` scores each corner so a full corner costs less than a squeezed window, and `fallbackOrder` is what lets it move when the chosen corner genuinely cannot hold it. That is why the same settings look right at 9:16, 1:1 and 16:9 without three sets of numbers, and why "does not cover the logo / subtitles / watermark" is structural: those are inputs to the search, not checks afterwards. The artwork is cover-fitted into a square box and clipped, so nothing is ever stretched and Circle is a true circular crop. `pictureSizes` in `lib/layout.ts` is per format because the clear band differs — the square steps are deliberately small, and a tight corner clamping Larger to the same window as Medium is documented behaviour, not a bug.
+
+The headline is measured from the **whole** text even mid-typewriter, so the panel does not grow as letters arrive, and `headlineIntro` resolves all four treatments to numbers from `elapsed` alone. Slide In's `offset` is a *fraction* of whatever travel the frame can spare, multiplied by `HeadlinePlan.slide`, which is zero when the window sits against the leading edge: nothing is allowed to move across the artwork. Anything that can contain Bulgarian is set in `fonts.sans` (Inter) for the same reason the subtitles are.
+
+### Motion
+
+Animation data is shared the same way the draw call is. `lib/analysis.ts` precomputes, once per audio file, a per-frame amplitude level, 40 log-spaced frequency bands (via a hand-rolled radix-2 FFT — `AnalyserNode` is useless here because export runs faster than realtime), and a 240 Hz envelope for the waveform window. Both the preview loop and the encoder read frames out of that same array with `getFrameData`.
+
+The four motion modes all read that one array. Waveform and Audio Bars are deliberately small and inset — they lost roughly half their height and no longer span the frame, which is what frees the column the picture window is placed into — and the smoothing in them runs *along* each frame, never between frames, for the determinism reason above. **Minimal Pulse** is the quiet end of the same scale: one thin line at `PULSE_SCALE` of the stage and `PULSE_OPACITY` (about 30%), which is the whole point of it, so do not "fix" the faintness. `none` stays a real choice rather than an absence. Do not remove a mode.
 
 ### Export pipelines
 
@@ -78,7 +104,17 @@ Subtitles are drawn inside `drawFrame`, at most two lines at a time, inside the 
 
 ### Watermark
 
-`lib/watermark.ts` owns the "Made with GLASKO" mark: the wording, the four corners and the defaults. `watermarkFor(settings, pro = false)` is the **only** place the mark is switched off, and it is written that way on purpose — a GLASKO PRO account removing the watermark should be one argument here, not a change spread across the renderer. The mark is drawn in `drawFrame`, so it is in the exported MP4 and not only in the editor.
+`lib/watermark.ts` owns the "Made with GLASKO" mark: the wording, the four corners and the defaults. `watermarkFor(settings, pro = false)` is the **only** place the mark is switched off, and it is written that way on purpose — a GLASKO PRO account removing the watermark should be one argument here, not a change spread across the renderer. Nothing calls it with `true`: accounts exist, a plan to check does not. The mark is drawn in `drawFrame`, so it is in the exported MP4 and not only in the editor, and it is passed into `planFrame` as a box every other element has to avoid, so it cannot be covered either.
+
+### Accounts
+
+Accounts are Netlify Identity (`@netlify/identity`), and they are **additive**. `app/page.tsx` does not read the session at all: signed in, signed out, or Identity not enabled on the deployment, every step of the video pipeline behaves the same, and nothing about a video is attached to a user. No audio, image or MP4 is uploaded or stored, and there is **no database table for users** — Identity holds the credentials, hashes them, issues the JWT and sends the confirmation and recovery mail.
+
+`lib/auth.ts` is deliberately the only code around it: field validation, one sentence of wording per failure, and the account date. Two rules there are not stylistic. A failed login never says which half was wrong, because saying so tells an attacker which addresses have accounts. And `MissingIdentityError` is not a failure — it gets the same calm setup message the subtitles panel gives a missing key, since the editor works without it. **A password must never be stored, logged, put in a URL or written to `localStorage`**: it goes from the input straight into the Identity call. If you add a field to those forms, keep that property.
+
+`components/AuthProvider.tsx` sits in the root layout rather than on the auth routes, because confirmation, recovery and invite links come back as a URL *hash* on whatever page the link opened — normally the editor — so `handleAuthCallback()` has to run there. `status` starts as `'loading'` and `AccountNav` renders nothing for the account until it resolves, so a signed-in visitor never sees a "Log in" button flash first.
+
+The feature is enabled on deploy by the `netlify-identity` skill's activation script, which is why `.netlify/features/netlify-identity` exists. Identity's own settings (open vs invite-only registration, email confirmation) are project configuration, not code. There is no social login, no plan, no payment code and no profile beyond name, email and creation date — keep it that way unless asked.
 
 
 ### Sharing
@@ -108,11 +144,12 @@ Every failure path resolves to `null` and `SiteFooter` then omits the counter li
 - Mobile-first. The layout is a single column that becomes a two-column grid with a sticky preview at `lg`.
 - Long work is reported, never blocking: transcription, translation and encoding all run against an `AbortController` with a progress callback, and the panels show a named stage ("Preparing audio", "Generating subtitles", "Translating subtitles", "Rendering video", "Preparing MP4", "Ready to share") plus a cancel button.
 - No emoji in the UI; icons are inline SVG in `components/Icons.tsx`. The one exception is the flag in the footer's "Product of Bulgaria 🇧🇬", which is fixed wording.
+- Two checks run without a browser, through `scripts/ts-resolve.mjs`, which lets plain `node` import the app's `.ts` modules: `npm run subtitles:check` (cue timing against synthetic recordings) and `npm run layout:check` (every element's box against every other, across all three formats). Run both after touching `lib/render.ts`, `lib/layout.ts`, `lib/picture.ts`, `lib/headline.ts`, `lib/align.ts` or `lib/analysis.ts`, along with `npm run typecheck`.
 - Deployment is Netlify via `@netlify/plugin-nextjs` (`netlify.toml`, publish `.next`). The `Permissions-Policy: microphone=(self)` header there is what lets the mic work on the deployed site.
 
 ## Database files
 
-`db/schema.ts`, `db/index.ts`, `drizzle.config.ts` and `netlify/database/migrations/` back the visitor counter, which is the only thing GLASKO stores. The `posts` table is left over from the previous app that occupied this repository and is unused; it stays because **an applied migration must never be deleted, renamed, or edited** — doing so breaks the deploy. Correct an applied migration by rolling forward with a new one.
+`db/schema.ts`, `db/index.ts`, `drizzle.config.ts` and `netlify/database/migrations/` back the visitor counter, which is the only thing GLASKO stores — accounts included: Identity keeps its own users, so adding sign-in added no table and no migration. The `posts` table is left over from the previous app that occupied this repository and is unused; it stays because **an applied migration must never be deleted, renamed, or edited** — doing so breaks the deploy. Correct an applied migration by rolling forward with a new one.
 
 `db/index.ts` imports `./schema` without a `.js` extension: it is bundled by Next.js now, which resolves the TypeScript source directly and cannot follow the ESM-style extension. `drizzle()` throws when the database environment variable is missing, so the route handler imports the client with a dynamic `import()` inside a `try` — a missing database has to become a 503 at request time, not a broken build.
 
@@ -127,4 +164,9 @@ Every failure path resolves to `null` and `SiteFooter` then omits the counter li
 - No automatic posting to any platform, and no analytics or telemetry beyond the anonymous visit count in the footer.
 - Sharing can only hand the MP4 to the device's own share sheet. Where that is unavailable (most desktop browsers), the file is downloaded and the user uploads it themselves.
 - A browser with `localStorage` blocked (Safari private browsing, cookies off) cannot be recognised on a later visit, so it counts as a new unique visitor each time. The visit is still recorded rather than dropped.
-- GLASKO PRO is a placeholder: the badge, description and "Notify me" acknowledgement are all there is. No payments, prices, checkout or sign-up exist. The watermark is the one feature already wired for it, through `watermarkFor(settings, pro)`.
+- Accounts do nothing yet beyond existing. There is no plan, no payment, no profile photo, no email change and nothing in an account that affects a video; a new sign-up must confirm by email if the project's Identity settings say so, and registration is open until set to invite-only there. The editor is complete without an account and must stay that way.
+- The picture window respects the chosen corner *whenever it can*. Where a corner is genuinely full it shrinks, and only if it still cannot fit does it move to another corner — so Size and Position are preferences the layout honours, not guarantees. In the square format the three size steps are close together, and a tight corner can clamp Larger to the same window as Medium.
+- A long topic on a frame that also has a large window in a top corner is set smaller, or dropped to the row below the window. If there is no readable row left above the animation, that frame leaves the headline out rather than drawing it over something else.
+- Minimal Pulse is faint on purpose (about 30% opacity). On a busy photographic background it reads as a suggestion of movement rather than a visible waveform.
+- GLASKO PRO is a placeholder: the badge, description and "Notify me" acknowledgement are all there is. No payments, prices or checkout exist. The watermark is the one feature already wired for it, through `watermarkFor(settings, pro)`.
+- There is no Contact or Support section, and no support email anywhere in the app. That is a deliberate hold, not an oversight — do not add one until asked.

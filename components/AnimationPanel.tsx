@@ -40,6 +40,26 @@ function MotionGlyph({ kind, active }: { kind: AnimationKind; active: boolean })
     );
   }
 
+  if (kind === 'pulse') {
+    // The same slide as the waveform at a fraction of the height and a third of the
+    // opacity, which is exactly what the mode does in the frame.
+    return (
+      <span aria-hidden="true" className="relative block h-8 w-[76px] overflow-hidden">
+        <svg
+          viewBox="0 0 152 32"
+          className="absolute left-0 top-0 h-full w-[152px]"
+          style={{ animation: 'wave-slide 3.2s linear infinite', opacity: 0.45 }}
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+        >
+          <path d="M0 16q4-4 8 0t8-2 8 4 8-5 8 3 8-1 8 3 8-4 8 2 8-1 8 3 8-4 8 3 8-1 8 2 8-3 8 2 8-1" />
+        </svg>
+      </span>
+    );
+  }
+
   return (
     <span aria-hidden="true" className="relative block h-8 w-[76px] overflow-hidden">
       <svg

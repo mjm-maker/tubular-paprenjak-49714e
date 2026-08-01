@@ -40,12 +40,17 @@ export const DEFAULT_BACKGROUND = GRADIENT_BACKGROUNDS[0];
  * `none` is a real choice, not an absence: the renderer skips the animation layer
  * entirely for it rather than drawing something invisible, so the frame is the
  * background plus subtitles, chrome and watermark and nothing else.
+ *
+ * `pulse` is the quiet end of the same scale — one thin line, held at roughly a third
+ * of the opacity of the other two, for a video where the picture window or the
+ * headline is meant to carry the frame and the voice only needs proof of life.
  */
-export type AnimationKind = 'wave' | 'bars' | 'none';
+export type AnimationKind = 'wave' | 'bars' | 'pulse' | 'none';
 
 export const ANIMATIONS: Array<{ id: AnimationKind; label: string; blurb: string }> = [
   { id: 'wave', label: 'Waveform', blurb: 'Scrolling wave with a centre playhead' },
   { id: 'bars', label: 'Audio bars', blurb: 'Frequency bars reacting to each syllable' },
+  { id: 'pulse', label: 'Minimal pulse', blurb: 'One soft line, barely there' },
   { id: 'none', label: 'No animation', blurb: 'Background, subtitles and voice only' },
 ];
 

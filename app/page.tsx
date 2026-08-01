@@ -5,7 +5,7 @@ import AnimationPanel from '@/components/AnimationPanel';
 import BackgroundPanel from '@/components/BackgroundPanel';
 import ExportPanel, { type ExportState } from '@/components/ExportPanel';
 import FormatPanel from '@/components/FormatPanel';
-import { BrandMark, PauseIcon, PlayIcon, AlertIcon } from '@/components/Icons';
+import { PauseIcon, PlayIcon, AlertIcon } from '@/components/Icons';
 import MusicPanel from '@/components/MusicPanel';
 import PreviewStage from '@/components/PreviewStage';
 import SharePanel from '@/components/SharePanel';
@@ -25,6 +25,7 @@ import {
 } from '@/lib/audio';
 import { canExportMp4, encodeVideo } from '@/lib/encode';
 import { DEFAULT_FORMAT, formatById, type FormatId } from '@/lib/layout';
+import { type BrandLogo, loadBrandLogo } from '@/lib/logo';
 import {
   buildDuckEnvelope,
   duckGainAt,
@@ -139,6 +140,7 @@ export default function Home() {
   const [exportState, setExportState] = useState<ExportState>({ phase: 'idle' });
   const [playing, setPlaying] = useState(false);
   const [fonts, setFonts] = useState(FALLBACK_FONTS);
+  const [logo, setLogo] = useState<BrandLogo | null>(null);
   const [shareSupported, setShareSupported] = useState(false);
   const [shareNotice, setShareNotice] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -195,6 +197,20 @@ export default function Home() {
     setExportSupported(canExportMp4());
   }, []);
 
+  // The logo the frame is branded with. Drawing is synchronous and loading is not,
+  // so it arrives in state and reaches the renderer through `spec` — which is the
+  // same object the exporter uses, so the preview and the MP4 get the same mark.
+  // Until it lands, `drawFrame` paints the wordmark it always painted.
+  useEffect(() => {
+    let cancelled = false;
+    loadBrandLogo().then((loaded) => {
+      if (!cancelled && loaded) setLogo(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Release object URLs when they are replaced or the page unmounts.
   useEffect(() => {
     return () => {
@@ -236,6 +252,7 @@ export default function Home() {
       backgroundImage: background.kind === 'image' ? image?.element ?? null : null,
       animation,
       fonts,
+      logo,
       subtitles:
         subtitles.mode !== 'none' && cues.length > 0 ? { cues, settings: subtitles } : null,
       // Mandatory in the free version: `watermarkFor` decides `enabled`, and the state
@@ -243,7 +260,7 @@ export default function Home() {
       // GLASKO PRO account would pass `true` as the second argument.
       watermark: watermarkFor(watermark),
     }),
-    [animation, background, cues, fonts, format, image, subtitles, watermark],
+    [animation, background, cues, fonts, format, image, logo, subtitles, watermark],
   );
 
   const pausePreview = useCallback(() => {
@@ -896,11 +913,26 @@ export default function Home() {
   return (
     <main className="mx-auto w-full max-w-6xl px-5 pb-20 pt-9 sm:px-8 lg:px-12 lg:pt-14">
       <header className="rise">
-        <div className="flex items-center gap-2.5 text-ember">
-          <BrandMark className="h-4 w-4" />
-          <span className="font-mono text-xs track-wide uppercase">Glasko</span>
-        </div>
-        <h1 className="mt-6 max-w-xl font-display text-[2.6rem] leading-[1.04] tracking-[-0.015em] sm:text-6xl">
+        {/*
+         * The header wordmark. The PNG is transparent and its own artwork is warm bone
+         * over gold, so it sits on --color-ink without a plate behind it.
+         *
+         * width/height are the file's real pixels (787x140): together with `h-auto`
+         * they lock the aspect ratio — the logo can only scale, never stretch — and
+         * reserve the row before the image arrives so the headline below does not jump.
+         * `max-w-*` caps it well under the headline at every breakpoint; the source is
+         * ~2.6x the widest rendered size, so it stays sharp on retina phones too.
+         */}
+        <img
+          src="/glasko-logo.png"
+          alt="GLASKO"
+          width={787}
+          height={140}
+          decoding="async"
+          fetchPriority="high"
+          className="block h-auto w-full max-w-[220px] sm:max-w-[268px] lg:max-w-[300px]"
+        />
+        <h1 className="mt-7 max-w-xl font-display text-[2.6rem] leading-[1.04] tracking-[-0.015em] sm:text-6xl">
           Turn your voice into
           <br />
           social video.

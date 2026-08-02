@@ -57,6 +57,29 @@ function getAudioContext(): AudioContext {
   return sharedContext;
 }
 
+/**
+ * Hand back the app's one AudioContext, started if the browser had it suspended.
+ *
+ * This exists for iOS Safari. It will only start an audio graph from inside a user
+ * gesture, and it treats that gesture as spent the moment the handler awaits anything —
+ * but the export awaits a great deal (a transcript, an offline mix, an entire WebCodecs
+ * attempt) before its real-time fallback needs to play the voice into a recorder. Calling
+ * this synchronously on the tap that starts the export is what keeps that fallback able
+ * to make sound instead of capturing a track of silence.
+ *
+ * Returning the shared context rather than a fresh one is deliberate too: iOS caps how
+ * many can be alive at once, and the export otherwise wants three.
+ */
+export function unlockAudioContext(): AudioContext | null {
+  try {
+    const context = getAudioContext();
+    if (context.state === 'suspended') void context.resume().catch(() => undefined);
+    return context;
+  } catch {
+    return null;
+  }
+}
+
 /** Decode any browser-supported audio container into raw samples. */
 export async function decodeAudio(blob: Blob): Promise<AudioBuffer> {
   const arrayBuffer = await blob.arrayBuffer();

@@ -11,6 +11,11 @@ interface SharePanelProps {
   format?: VideoFormat;
   /** Whether this browser will hand the actual MP4 to the OS share sheet. */
   fileSharingSupported: boolean;
+  /**
+   * Whether the encoder proved the finished file carries sound. False means the file
+   * is not offered at all: a silent video that reaches a feed cannot be taken back.
+   */
+  audible: boolean;
   notice: string | null;
   onShare: () => void;
   onCopyLink: () => void;
@@ -31,6 +36,7 @@ export default function SharePanel({
   filename,
   format = DEFAULT_FORMAT,
   fileSharingSupported,
+  audible,
   notice,
   onShare,
   onCopyLink,
@@ -65,30 +71,53 @@ export default function SharePanel({
         )}
 
         <div className="min-w-0 flex-1 space-y-3">
-          <button
-            type="button"
-            onClick={onShare}
-            className="btn-primary"
-            title={
-              fileSharingSupported
-                ? 'Open your device share sheet with the MP4 attached'
-                : 'This browser cannot attach files to the share sheet'
-            }
-          >
-            <ShareIcon className="h-4 w-4" />
-            Share video
-          </button>
+          {audible ? (
+            <>
+              <button
+                type="button"
+                onClick={onShare}
+                className="btn-primary"
+                title={
+                  fileSharingSupported
+                    ? 'Open your device share sheet with the MP4 attached'
+                    : 'This browser cannot attach files to the share sheet'
+                }
+              >
+                <ShareIcon className="h-4 w-4" />
+                Share video
+              </button>
 
-          <div className="grid gap-2.5 sm:grid-cols-2">
-            <button type="button" onClick={onDownload} className="btn-ghost">
-              <DownloadIcon className="h-4 w-4" />
-              Download MP4
-            </button>
-            <button type="button" onClick={onCopyLink} className="btn-ghost">
-              <LinkIcon className="h-4 w-4" />
-              Copy GLASKO link
-            </button>
-          </div>
+              <div className="grid gap-2.5 sm:grid-cols-2">
+                <button type="button" onClick={onDownload} className="btn-ghost">
+                  <DownloadIcon className="h-4 w-4" />
+                  Download MP4
+                </button>
+                <button type="button" onClick={onCopyLink} className="btn-ghost">
+                  <LinkIcon className="h-4 w-4" />
+                  Copy GLASKO link
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Neither Share nor Download is rendered: the file has no provable sound in
+                  it, and posting a silent video is not something to be undone afterwards. */}
+              <div
+                className="flex items-start gap-3 border border-clay/60 bg-clay/[0.12] px-4 py-3.5 text-sm"
+                role="alert"
+              >
+                <AlertIcon className="mt-0.5 h-4 w-4 shrink-0 text-clay" />
+                <p className="text-bone">
+                  This video has no audible sound in it, so it is not offered for sharing or
+                  download. Check the microphone and the voice volume, then generate it again.
+                </p>
+              </div>
+              <button type="button" onClick={onCopyLink} className="btn-ghost">
+                <LinkIcon className="h-4 w-4" />
+                Copy GLASKO link
+              </button>
+            </>
+          )}
 
           {notice && (
             <p
@@ -101,20 +130,21 @@ export default function SharePanel({
             </p>
           )}
 
-          {fileSharingSupported ? (
-            <p className="label-mono normal-case tracking-normal leading-relaxed">
-              Share video opens your phone&apos;s own share menu with the MP4 attached — pick
-              Instagram, TikTok, WhatsApp or anything else installed.
-            </p>
-          ) : (
-            <div className="flex items-start gap-3 border border-bone/12 px-4 py-3.5 text-sm text-ash">
-              <AlertIcon className="mt-0.5 h-4 w-4 shrink-0" />
-              <p>
-                This browser cannot pass a file to another app, so Share falls back to a
-                download. Save the MP4 and upload it from your gallery or files app.
+          {audible &&
+            (fileSharingSupported ? (
+              <p className="label-mono normal-case tracking-normal leading-relaxed">
+                Share video opens your phone&apos;s own share menu with the MP4 attached — pick
+                Instagram, TikTok, WhatsApp or anything else installed.
               </p>
-            </div>
-          )}
+            ) : (
+              <div className="flex items-start gap-3 border border-bone/12 px-4 py-3.5 text-sm text-ash">
+                <AlertIcon className="mt-0.5 h-4 w-4 shrink-0" />
+                <p>
+                  This browser cannot pass a file to another app, so Share falls back to a
+                  download. Save the MP4 and upload it from your gallery or files app.
+                </p>
+              </div>
+            ))}
 
           <p className="label-mono normal-case tracking-normal break-all">{filename}</p>
         </div>

@@ -25,6 +25,7 @@ import {
   MAX_DURATION_SECONDS,
   decodeAudio,
   formatDuration,
+  unlockAudioContext,
 } from '@/lib/audio';
 import { canExportMp4, encodeVideo } from '@/lib/encode';
 import { DEFAULT_HEADLINE, headlineText, type HeadlineSettings } from '@/lib/headline';
@@ -663,6 +664,13 @@ export default function Home() {
         setSubtitleStatus({ phase: 'idle' });
         return;
       }
+      // A part that failed does not throw away the parts that finished. Keeping them
+      // means Generate again picks up from a transcript rather than from nothing, and
+      // the lines that were already heard stay on the preview while the error shows.
+      if (error instanceof SubtitleError && error.partialCues?.length) {
+        setCues(error.partialCues);
+        if (error.partialLanguage) setDetected(error.partialLanguage);
+      }
       setSubtitleStatus(subtitleErrorState(error));
     } finally {
       if (subtitleAbortRef.current === controller) subtitleAbortRef.current = null;
@@ -742,8 +750,21 @@ export default function Home() {
 
   const generate = useCallback(async () => {
     if (!source) return;
+
+    // First thing, before a single await: iOS Safari only lets an audio graph start from
+    // inside a user gesture, and it counts the gesture as spent as soon as this handler
+    // yields. The real-time capture pipeline needs a running context long after the
+    // transcript and the mix have finished, so it is unlocked here, on the tap itself.
+    // Everything downstream — playback, and decoding the finished file to check it — uses
+    // this one context rather than opening more, which iOS also limits.
+    const audioContext = unlockAudioContext();
+
     pausePreview();
     setShareNotice(null);
+
+    // A transcript still running in the Subtitles panel would race this one on `setCues`
+    // and could finish last with the wrong language set, so it yields to the export.
+    subtitleAbortRef.current?.abort();
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -783,7 +804,7 @@ export default function Home() {
           },
         );
         setSubtitleStatus({ phase: 'ready' });
-      } else if (missingLanguage && detected) {
+      } else if (missingLanguage) {
         setExportState({
           phase: 'working',
           stage: 'render',
@@ -793,7 +814,11 @@ export default function Home() {
         });
         exportCues = await translateCues({
           cues,
-          from: detected,
+          // The language the cues already carry is, by definition, the one that is not
+          // missing. Derived rather than read from `detected`, which is null whenever the
+          // cues outlived the run that produced them — and a null there used to skip this
+          // branch entirely and export a bilingual video with one language blank.
+          from: missingLanguage === 'bg' ? 'en' : 'bg',
           to: missingLanguage,
           signal: controller.signal,
           onProgress: ({ detail, ratio }) => {
@@ -843,6 +868,7 @@ export default function Home() {
               ? { cues: exportCues, settings: subtitles }
               : null,
         },
+        audioContext,
         signal: controller.signal,
         onProgress: ({ stage, ratio, detail }) =>
           setExportState({
@@ -873,7 +899,6 @@ export default function Home() {
   }, [
     buildSubtitles,
     cues,
-    detected,
     duck,
     music,
     musicVolume,
@@ -901,6 +926,14 @@ export default function Home() {
   // as unshareable here too instead of only failing when the button is pressed.
   const fileSharingSupported = videoFile ? canShareFile(videoFile) : shareSupported;
 
+  /**
+   * Whether the finished file was proved to carry sound. The encoder already refuses to
+   * return one that was not, so in practice this is always true — it is read here anyway
+   * because a silent upload is the one failure that looks like a success, and the file
+   * should not reach a share sheet on the strength of an assumption.
+   */
+  const videoAudible = exportState.phase !== 'done' || exportState.result.audio.audible;
+
   // A playable URL for the finished file, so the share section can show the real MP4.
   useEffect(() => {
     if (exportState.phase !== 'done') {
@@ -916,6 +949,16 @@ export default function Home() {
   const saveVideo = useCallback((): boolean => {
     if (exportState.phase !== 'done') {
       setShareNotice('There is no video yet. Generate one first.');
+      return false;
+    }
+    // The encoder refuses to return a file it could not hear, so this is the second lock
+    // on the same door rather than the first. It is here because a silent upload is the
+    // failure that looks like a success, and a file that reached this point unproven
+    // should leave through an explanation, not through the downloads folder.
+    if (!exportState.result.audio.audible) {
+      setShareNotice(
+        'This video came out without audible sound, so it was not saved. Generate it again.',
+      );
       return false;
     }
     const saved = downloadBlob(exportState.result.blob, exportState.filename);
@@ -940,6 +983,12 @@ export default function Home() {
   const share = useCallback(async () => {
     if (!videoFile) {
       setShareNotice('There is no video yet. Generate one first.');
+      return;
+    }
+    if (!videoAudible) {
+      setShareNotice(
+        'This video came out without audible sound, so it was not shared. Generate it again.',
+      );
       return;
     }
     const blocked = describeShareBlock(videoFile);
@@ -976,7 +1025,7 @@ export default function Home() {
         setShareNotice(`Sharing failed. ${DOWNLOAD_INSTEAD}`);
         break;
     }
-  }, [saveVideo, videoFile]);
+  }, [saveVideo, videoAudible, videoFile]);
 
   const copyLink = useCallback(async () => {
     const copied = await copyText(siteUrl());
@@ -1183,6 +1232,7 @@ export default function Home() {
               filename={exportState.filename}
               format={format}
               fileSharingSupported={fileSharingSupported}
+              audible={videoAudible}
               notice={shareNotice}
               onShare={share}
               onCopyLink={copyLink}

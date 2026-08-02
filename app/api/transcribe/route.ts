@@ -22,12 +22,21 @@ import {
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
-/** Transcribing a 45-second slice takes a while; the default 10s would cut it off. */
+/**
+ * Asks for more than the framework default. Note that this is only honoured by hosts
+ * that read it — `@netlify/plugin-nextjs` does not, so on Netlify the function still
+ * runs under the platform's own ceiling. That is why the real protection is elsewhere:
+ * the browser sends short slices (`SEGMENT_SECONDS` in `lib/transcribe.ts`), the model
+ * is a fast one, and `generateJson` times its own call out into a clean 504 rather
+ * than letting the platform kill the function and return an unreadable error page.
+ */
 export const maxDuration = 60;
 
 /** Roughly 3 MB of audio once decoded — inside every platform's request ceiling. */
 const MAX_BASE64_LENGTH = 4_400_000;
 const ALLOWED_MIME = ['audio/wav', 'audio/wave', 'audio/x-wav', 'audio/mpeg', 'audio/mp4'];
+
+const DEV = process.env.NODE_ENV !== 'production';
 
 interface RawCue {
   start?: unknown;
@@ -118,6 +127,7 @@ export async function POST(request: Request) {
     { inlineData: { mimeType, data: audio } },
   ];
 
+  const startedAt = Date.now();
   try {
     const result = await generateJson<{ language?: unknown; cues?: unknown }>({
       model: TRANSCRIBE_MODEL,
@@ -145,11 +155,31 @@ export async function POST(request: Request) {
         text: cue.text,
       }));
 
+    if (DEV) {
+      console.info(
+        '[glasko:transcribe:route]',
+        JSON.stringify({
+          clipSeconds,
+          offset,
+          base64Length: audio.length,
+          elapsedMs: Date.now() - startedAt,
+          status: 200,
+          cues: cues.length,
+        }),
+      );
+    }
     return Response.json({ language, cues }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
-    if (error instanceof ProviderError) {
-      return Response.json({ error: error.message }, { status: error.status });
+    const elapsedMs = Date.now() - startedAt;
+    const status = error instanceof ProviderError ? error.status : 502;
+    const message =
+      error instanceof ProviderError ? error.message : 'Transcription failed. Please try again.';
+    if (DEV) {
+      console.info(
+        '[glasko:transcribe:route]',
+        JSON.stringify({ clipSeconds, offset, elapsedMs, status, error: message }),
+      );
     }
-    return Response.json({ error: 'Transcription failed. Please try again.' }, { status: 502 });
+    return Response.json({ error: message }, { status });
   }
 }

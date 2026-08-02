@@ -53,6 +53,15 @@ export interface EncodeOptions {
   spec: RenderSpec;
   onProgress: (progress: EncodeProgress) => void;
   signal?: AbortSignal;
+  /**
+   * An AudioContext already started inside the user gesture that began the export.
+   *
+   * Only the real-time pipelines need one, and by the time they run the gesture is long
+   * gone — which on iOS Safari means a context created here would stay suspended and feed
+   * the recorder pure silence. The page unlocks the shared context on the tap and passes
+   * it down; a missing one is still handled, it is just the case that fails on a phone.
+   */
+  audioContext?: AudioContext | null;
 }
 
 const AUDIO_BITRATE = 128_000;
@@ -135,10 +144,55 @@ function now(): number {
   return typeof performance !== 'undefined' ? performance.now() : 0;
 }
 
-/** Make sure webfonts are ready before any text is painted into a frame. */
-async function waitForFonts(): Promise<void> {
+/**
+ * A sample of every glyph the frame is about to set, so the font loader has something
+ * concrete to fetch. Real cue text is included because a webfont is subsetted: the
+ * Cyrillic half of Inter is a separate file, and asking for it in the abstract does not
+ * bring it down.
+ */
+function textSample(spec: RenderSpec): string {
+  let sample = 'AaBbCcXxYyZz АаБбВвГгДдЕеЖжЗзИиЙйКкЛлМмНнОоПпРрСсТтУуФфХхЦцЧчШшЩщЪъЬьЮюЯя 0123456789';
+  for (const cue of spec.subtitles?.cues.slice(0, 24) ?? []) {
+    sample += ` ${cue.bg} ${cue.en}`;
+  }
+  return sample.slice(0, 1200);
+}
+
+/**
+ * Make sure the faces the frame paints in are really loaded before the first frame.
+ *
+ * `document.fonts.ready` on its own is not enough, and this is the difference between
+ * subtitles that are in the preview and subtitles that are in the file. That promise
+ * settles for the faces the page has already *asked* for, and a subsetted webfont is only
+ * requested once a glyph from it is laid out somewhere. A Bulgarian cue can easily be the
+ * first Cyrillic text the tab has ever needed, so the fetch starts as the export is
+ * drawing — too late for the frames already encoded, and on an engine that measures a
+ * pending face as zero-width, too late for all of them.
+ *
+ * Asking for the exact `weight px family` combinations against the actual cue text forces
+ * the fetch to happen first. Every step is optional: a face that will not load leaves a
+ * fallback family, which is worse-looking and still legible.
+ */
+async function ensureFontsReady(spec: RenderSpec): Promise<void> {
   try {
-    await document.fonts.ready;
+    const faces = typeof document !== 'undefined' ? document.fonts : null;
+    if (!faces) return;
+    const sample = textSample(spec);
+    const pending: Array<Promise<unknown>> = [];
+    const ask = (weight: number, family: string, text: string) => {
+      try {
+        pending.push(Promise.resolve(faces.load(`${weight} 64px ${family}`, text)));
+      } catch {
+        // An unparseable stack is not worth failing an export over.
+      }
+    };
+    // Subtitles, the watermark and anything else that can contain Cyrillic are set in
+    // `sans`, across every weight the five subtitle styles use.
+    for (const weight of [400, 500, 600, 700, 800]) ask(weight, spec.fonts.sans, sample);
+    ask(400, spec.fonts.display, sample);
+    ask(400, spec.fonts.mono, '0123456789:-');
+    await Promise.all(pending.map((promise) => promise.catch(() => undefined)));
+    await faces.ready;
   } catch {
     // Font loading is a nicety; a fallback family still renders.
   }
@@ -193,11 +247,13 @@ export interface AudioProof {
   audible: boolean;
   /**
    * `decoded` — the file's own audio track was decoded back to samples and measured.
+   * `captured` — the decode was unavailable, so the track was measured live off the
+   *   very MediaStream the recorder was writing.
    * `container` — only the container's audio-track signature could be checked.
    * `too-large` — decoding would have needed more memory than it is worth.
    * `undecodable` — this browser cannot decode what it just wrote.
    */
-  method: 'decoded' | 'container' | 'too-large' | 'undecodable';
+  method: 'decoded' | 'captured' | 'container' | 'too-large' | 'undecodable';
   /** Loudest sample found, 0..1. Zero when the method was not `decoded`. */
   peak: number;
   rms: number;
@@ -259,6 +315,7 @@ export async function verifyExportedAudio(
   blob: Blob,
   mimeType: string,
   expectedSeconds: number,
+  sharedContext?: AudioContext | null,
 ): Promise<AudioProof> {
   const container = await hasAudioTrack(blob, mimeType);
   if (!container) {
@@ -273,12 +330,13 @@ export async function verifyExportedAudio(
     typeof AudioContext !== 'undefined'
       ? AudioContext
       : (globalThis as unknown as { webkitAudioContext?: AudioCtor }).webkitAudioContext;
-  if (!Ctor) return { audible: true, method: 'undecodable', peak: 0, rms: 0, seconds: 0 };
+  // The page's own context is reused when it was handed down, because iOS caps how many
+  // may be alive at once and the export has already opened one to play the voice.
+  const context = sharedContext ?? (Ctor ? new Ctor() : null);
+  if (!context) return { audible: true, method: 'undecodable', peak: 0, rms: 0, seconds: 0 };
 
-  let context: AudioContext | null = null;
   try {
     const bytes = await blob.arrayBuffer();
-    context = new Ctor();
     const decoded = await context.decodeAudioData(bytes);
     const { peak, rms } = measureBuffer(decoded);
     const longEnough = decoded.duration >= expectedSeconds * MIN_AUDIO_COVERAGE;
@@ -292,7 +350,7 @@ export async function verifyExportedAudio(
   } catch {
     return { audible: true, method: 'undecodable', peak: 0, rms: 0, seconds: 0 };
   } finally {
-    if (context) void context.close().catch(() => {});
+    if (context !== sharedContext) void context.close().catch(() => {});
   }
 }
 
@@ -301,6 +359,8 @@ export function describeAudioProof(proof: AudioProof): string {
   switch (proof.method) {
     case 'decoded':
       return `Audio verified — decoded ${proof.seconds.toFixed(1)}s, peak ${proof.peak.toFixed(2)}`;
+    case 'captured':
+      return `Audio verified — the recorded track carried sound, peak ${proof.peak.toFixed(2)}`;
     case 'too-large':
       return 'Audio track confirmed in the container (file too large to decode here)';
     case 'undecodable':
@@ -445,14 +505,16 @@ async function encodeWithWebCodecs(options: EncodeOptions): Promise<Blob | null>
     },
   });
 
-  const canvas =
-    typeof OffscreenCanvas !== 'undefined'
-      ? new OffscreenCanvas(width, height)
-      : Object.assign(document.createElement('canvas'), { width, height });
-  const ctx = canvas.getContext('2d', { alpha: false }) as
-    | CanvasRenderingContext2D
-    | OffscreenCanvasRenderingContext2D
-    | null;
+  // A DOM canvas, deliberately, even where OffscreenCanvas exists. The preview draws into
+  // one, and the rendering contract is that both draw the *same* frame — which only holds
+  // if `ctx.font` resolves the page's webfonts the same way in both. Safari does not give
+  // an OffscreenCanvas the document's font set, so a subtitle set in Inter measures and
+  // paints there as something else, or as nothing: on screen and not in the file. The
+  // speed of this path is bounded by the encoder, not by the canvas.
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d', { alpha: false });
   if (!ctx) return null;
 
   const checkFailure = () => {
@@ -500,14 +562,20 @@ async function encodeWithWebCodecs(options: EncodeOptions): Promise<Blob | null>
       throwIfAborted(signal);
       checkFailure();
 
-      drawFrame(ctx, getFrameData(analysis, index), spec, index, 1);
-      const frame = new VideoFrame(canvas as CanvasImageSource, {
-        timestamp: Math.round(index * microsecondsPerFrame),
+      // One clock for the three things that have to agree. `frame.elapsed` is the instant
+      // the animation is read at and the instant `cueAt` picks the subtitle for, so it is
+      // also the instant the frame is stamped with — rather than a second expression that
+      // happens to evaluate to the same number today. The audio above is timestamped from
+      // its own sample offset against the same zero, which is where they meet.
+      const frame = getFrameData(analysis, index);
+      drawFrame(ctx, frame, spec, index, 1);
+      const videoFrame = new VideoFrame(canvas, {
+        timestamp: Math.round(frame.elapsed * 1_000_000),
         duration: Math.round(microsecondsPerFrame),
       });
       // A keyframe every two seconds keeps seeking snappy in social feeds.
-      videoEncoder.encode(frame, { keyFrame: index % (FPS * 2) === 0 });
-      frame.close();
+      videoEncoder.encode(videoFrame, { keyFrame: index % (FPS * 2) === 0 });
+      videoFrame.close();
 
       while (videoEncoder.encodeQueueSize > 8) {
         throwIfAborted(signal);
@@ -576,11 +644,21 @@ function pickRecorderMime(candidates: string[]): string | null {
   return null;
 }
 
+/** What a real-time capture produced, and what its audio track was heard to carry. */
+interface RealtimeCapture {
+  blob: Blob;
+  /**
+   * Peak amplitude read off the very MediaStream track the recorder was writing, or
+   * `null` where the engine would not let us listen to it.
+   */
+  trackPeak: number | null;
+}
+
 /**
  * Play the audio through a MediaStream while a canvas is painted in real time, and
  * record both into one file.
  */
-async function recordRealtime(options: EncodeOptions, mimeType: string): Promise<Blob> {
+async function recordRealtime(options: EncodeOptions, mimeType: string): Promise<RealtimeCapture> {
   const { audioBuffer, analysis, spec, onProgress, signal } = options;
 
   const { width, height } = frameSize(spec);
@@ -593,7 +671,11 @@ async function recordRealtime(options: EncodeOptions, mimeType: string): Promise
   // Paint frame zero so the stream never starts on a blank canvas.
   drawFrame(ctx, getFrameData(analysis, 0), spec, 0, 1);
 
-  const audioContext = new AudioContext({ sampleRate: audioBuffer.sampleRate });
+  // The context the page unlocked on the tap, where there is one. Building a fresh one
+  // here is what fails on iOS: the gesture that would have been allowed to start it was
+  // spent several awaits ago, so it stays suspended and the recording comes out silent.
+  const provided = options.audioContext ?? null;
+  const audioContext = provided ?? new AudioContext({ sampleRate: audioBuffer.sampleRate });
   const source = audioContext.createBufferSource();
   source.buffer = audioBuffer;
   const destination = audioContext.createMediaStreamDestination();
@@ -615,10 +697,35 @@ async function recordRealtime(options: EncodeOptions, mimeType: string): Promise
   for (const track of voiceTracks) stream.addTrack(track);
   if (stream.getAudioTracks().length === 0) {
     for (const track of [...stream.getTracks(), ...voiceTracks]) track.stop();
-    void audioContext.close();
+    if (!provided) void audioContext.close();
     throw new Error(
       'This browser would not put the voice track into the recording, so the video would have no sound.',
     );
+  }
+
+  // Listen to the track that is going into the file, while it goes in.
+  //
+  // This is the answer to the one failure this whole module is built around. Safari will
+  // accept a Web Audio track into a canvas capture stream, record it, and write silence —
+  // and its own fragmented MP4 then very often cannot be handed back to `decodeAudioData`,
+  // so the check that would have caught it fails open and the silent file is offered as a
+  // success. A tap on the track itself needs no decoder and no container support: if this
+  // never sees a sample above the silence floor, nothing in the file will be audible.
+  let trackPeak: number | null = null;
+  let analyser: AnalyserNode | null = null;
+  let probe: Float32Array<ArrayBuffer> | null = null;
+  try {
+    const probeSource = audioContext.createMediaStreamSource(new MediaStream(voiceTracks));
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 2048;
+    probeSource.connect(analyser);
+    probe = new Float32Array(analyser.fftSize);
+    trackPeak = 0;
+  } catch {
+    // No probe on this engine: the decode check downstream stays the only word.
+    analyser = null;
+    probe = null;
+    trackPeak = null;
   }
 
   const recorder = new MediaRecorder(stream, {
@@ -647,7 +754,9 @@ async function recordRealtime(options: EncodeOptions, mimeType: string): Promise
       // Already stopped.
     }
     for (const track of stream.getTracks()) track.stop();
-    void audioContext.close();
+    // Only ours to close. The page's shared context outlives the export and is what the
+    // next one will need to still be running.
+    if (!provided) void audioContext.close();
   };
 
   const onAbort = () => {
@@ -674,6 +783,13 @@ async function recordRealtime(options: EncodeOptions, mimeType: string): Promise
       const elapsed = Math.max(0, audioContext.currentTime - startedAt);
       const index = Math.min(analysis.frameCount - 1, Math.max(0, Math.round(elapsed * FPS)));
       drawFrame(ctx, getFrameData(analysis, index), spec, index, 1);
+      if (analyser && probe) {
+        analyser.getFloatTimeDomainData(probe);
+        for (let i = 0; i < probe.length; i += 4) {
+          const value = Math.abs(probe[i]);
+          if (value > (trackPeak ?? 0)) trackPeak = value;
+        }
+      }
       // Roughly ten updates a second: enough to look live, few enough that React
       // re-rendering the progress bar does not compete with the capture itself.
       if (elapsed - lastReport >= 0.1) {
@@ -697,7 +813,7 @@ async function recordRealtime(options: EncodeOptions, mimeType: string): Promise
 
     await stopped;
     throwIfAborted(signal);
-    return new Blob(chunks, { type: recorder.mimeType || mimeType });
+    return { blob: new Blob(chunks, { type: recorder.mimeType || mimeType }), trackPeak };
   } finally {
     signal?.removeEventListener('abort', onAbort);
     cleanup();
@@ -737,8 +853,19 @@ export async function encodeVideo(options: EncodeOptions): Promise<EncodeResult>
       'There is no audio to put in the video. Record or upload a voice message first.',
     );
   }
+  // The cheapest of the three audio checks, and the only one that behaves identically in
+  // every browser: an encoder can lose sound but never invent it, so if what goes in is
+  // silence, every route out is silence too. Said now rather than after a minute of a
+  // phone's battery has gone into proving it.
+  if (measureBuffer(options.audioBuffer).peak < AUDIBLE_PEAK) {
+    throw new Error(
+      'The recording is silent, so the video would be too. Check the microphone and the voice volume, then record again.',
+    );
+  }
 
-  await waitForFonts();
+  // Before any frame is painted, and before the preview's own font resolution is trusted:
+  // a subtitle in a face that has not arrived yet is a subtitle that is not in the file.
+  await ensureFontsReady(options.spec);
   const { width, height } = frameSize(options.spec);
   const expectedSeconds = options.audioBuffer.duration;
 
@@ -749,7 +876,27 @@ export async function encodeVideo(options: EncodeOptions): Promise<EncodeResult>
       ratio: 0.5,
       detail: 'Checking the exported file has audible sound',
     });
-    return verifyExportedAudio(blob, mimeType, expectedSeconds);
+    return verifyExportedAudio(blob, mimeType, expectedSeconds, options.audioContext);
+  };
+
+  /**
+   * Reconcile the two ways a real-time capture can be checked.
+   *
+   * Decoding the finished file is the better evidence and wins whenever it is available.
+   * Where it is not — which on iPhone Safari is the common case, since it frequently
+   * cannot read back the fragmented MP4 it just wrote — the proof would otherwise fail
+   * open and a silent file would be handed over as a success. The peak measured off the
+   * recorded track answers the same question without needing a decoder.
+   */
+  const reconcile = (audio: AudioProof, trackPeak: number | null): AudioProof => {
+    if (audio.method === 'decoded' || trackPeak === null) return audio;
+    return {
+      audible: trackPeak >= AUDIBLE_PEAK,
+      method: 'captured',
+      peak: trackPeak,
+      rms: 0,
+      seconds: expectedSeconds,
+    };
   };
 
   // 1. WebCodecs. Verifies its own audio track before returning, so a failure here is
@@ -784,12 +931,12 @@ export async function encodeVideo(options: EncodeOptions): Promise<EncodeResult>
   if (mp4Mime) {
     options.onProgress({ stage: 'record', ratio: 0, detail: 'Starting real-time capture' });
     try {
-      const blob = await recordRealtime(options, mp4Mime);
+      const { blob, trackPeak } = await recordRealtime(options, mp4Mime);
       const mimeType = blob.type || 'video/mp4';
       // A recorder that quietly wrote video only leaves the WebM route below as the one
       // remaining way to get a file with sound, so fall through instead of returning.
       if (blob.size > 0) {
-        const audio = await proveAudio(blob, mimeType);
+        const audio = reconcile(await proveAudio(blob, mimeType), trackPeak);
         if (audio.audible) {
           return {
             blob,
@@ -814,13 +961,18 @@ export async function encodeVideo(options: EncodeOptions): Promise<EncodeResult>
   const webmMime = pickRecorderMime(WEBM_RECORDER_MIMES);
   if (webmMime) {
     options.onProgress({ stage: 'record', ratio: 0, detail: 'Starting real-time capture' });
-    const intermediate = await recordRealtime(options, webmMime);
+    const { blob: intermediate, trackPeak } = await recordRealtime(options, webmMime);
     throwIfAborted(options.signal);
     // Checked before the transcode rather than after: ffmpeg would happily spend
     // minutes turning a soundless recording into a soundless MP4.
     if (!(await hasAudioTrack(intermediate, intermediate.type || webmMime))) {
       throw new Error(
         'This browser recorded the video without its audio track. Try Chrome, Edge or Safari.',
+      );
+    }
+    if (trackPeak !== null && trackPeak < AUDIBLE_PEAK) {
+      throw new Error(
+        'This browser recorded the video without any sound in it. Try Chrome, Edge or Safari.',
       );
     }
     options.onProgress({
@@ -832,7 +984,7 @@ export async function encodeVideo(options: EncodeOptions): Promise<EncodeResult>
     const blob = await transcodeToMp4(intermediate, (ratio) =>
       options.onProgress({ stage: 'convert', ratio, detail: 'Converting to H.264 / AAC' }),
     );
-    const audio = await proveAudio(blob, 'video/mp4');
+    const audio = reconcile(await proveAudio(blob, 'video/mp4'), trackPeak);
     if (!audio.audible) {
       throw new Error('The converted MP4 came out without audible audio. Please try again.');
     }

@@ -15,11 +15,45 @@
  * deploy; anywhere else, set `GEMINI_API_KEY` yourself.
  */
 
-/** Model used for transcription (audio in) and for translation (text in). */
-export const TRANSCRIBE_MODEL = 'gemini-2.5-pro';
+/**
+ * Model used for transcription (audio in) and for translation (text in).
+ *
+ * Both are Flash rather than Pro, and that is a latency decision rather than a
+ * quality one. This route has to answer inside the hosting platform's function
+ * timeout, which is tens of seconds; Pro is a thinking model and spent longer than
+ * that on a single slice of audio, so the function was killed and the user was told
+ * only that subtitles "could not be generated". Flash returns the same schema over
+ * the same audio in a fraction of the time, which is what makes the feature finish.
+ */
+export const TRANSCRIBE_MODEL = 'gemini-2.5-flash';
 export const TRANSLATE_MODEL = 'gemini-2.5-flash';
 
 const DEFAULT_GEMINI_BASE = 'https://generativelanguage.googleapis.com';
+
+/**
+ * How long one provider call may run before this route gives up on it.
+ *
+ * A function that overruns the platform's own ceiling is killed mid-flight, and what
+ * reaches the browser is the platform's error page rather than this route's JSON —
+ * unreadable, so it surfaces as a generic failure with no status in it. Timing the
+ * call out here turns that into a clean 504 with a sentence the caller can show and
+ * retry against.
+ */
+export const PROVIDER_TIMEOUT_MS = 25_000;
+
+/** Statuses that mean what they say; anything else the provider invents becomes 502. */
+const PASSTHROUGH_STATUS = new Set([400, 401, 403, 404, 408, 413, 429, 500, 502, 503, 504]);
+
+const DEV = process.env.NODE_ENV !== 'production';
+
+/**
+ * Development-only trace of one provider call. Statuses, timings and the provider's
+ * own reason — never the key, never the audio.
+ */
+function traceProvider(entry: Record<string, unknown>): void {
+  if (!DEV) return;
+  console.info('[glasko:provider]', JSON.stringify(entry));
+}
 
 export interface Provider {
   apiKey: string;
@@ -75,19 +109,34 @@ export async function generateJson<T>(options: {
   responseSchema?: unknown;
   maxOutputTokens?: number;
   signal?: AbortSignal;
+  /** Give up on the provider after this long. Defaults to `PROVIDER_TIMEOUT_MS`. */
+  timeoutMs?: number;
 }): Promise<T> {
   const provider = resolveProvider();
   if (!provider) throw new ProviderError('No transcription key is configured.', 503);
 
-  const response = await fetch(
-    `${provider.baseUrl}/v1beta/models/${options.model}:generateContent`,
-    {
+  // One controller for two reasons to stop: the caller cancelling, and the deadline
+  // expiring. Which of them fired decides what the caller is told, so it is recorded.
+  const budget = options.timeoutMs ?? PROVIDER_TIMEOUT_MS;
+  const controller = new AbortController();
+  let expired = false;
+  const timer = setTimeout(() => {
+    expired = true;
+    controller.abort();
+  }, budget);
+  const relay = () => controller.abort();
+  options.signal?.addEventListener('abort', relay);
+
+  const startedAt = Date.now();
+  let response: Response;
+  try {
+    response = await fetch(`${provider.baseUrl}/v1beta/models/${options.model}:generateContent`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         'x-goog-api-key': provider.apiKey,
       },
-      signal: options.signal,
+      signal: controller.signal,
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: options.systemInstruction }] },
         contents: [{ role: 'user', parts: options.parts }],
@@ -98,8 +147,34 @@ export async function generateJson<T>(options: {
           ...(options.maxOutputTokens ? { maxOutputTokens: options.maxOutputTokens } : {}),
         },
       }),
-    },
-  );
+    });
+  } catch (error) {
+    const failedAfter = Date.now() - startedAt;
+    if (expired) {
+      traceProvider({
+        model: options.model,
+        elapsedMs: failedAfter,
+        status: 504,
+        error: `no answer within ${budget} ms`,
+      });
+      throw new ProviderError(
+        `The transcription service did not answer within ${Math.round(budget / 1000)} seconds.`,
+        504,
+      );
+    }
+    traceProvider({
+      model: options.model,
+      elapsedMs: failedAfter,
+      status: 502,
+      error: error instanceof Error ? error.message : 'unreachable',
+    });
+    throw new ProviderError('The transcription service could not be reached.', 502);
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener('abort', relay);
+  }
+
+  const elapsedMs = Date.now() - startedAt;
 
   if (!response.ok) {
     // The provider's own message can contain request detail, so only the status and a
@@ -110,13 +185,39 @@ export async function generateJson<T>(options: {
         : response.status === 401 || response.status === 403
           ? 'The transcription key was rejected. Check GEMINI_API_KEY in the Netlify environment.'
           : `The transcription service answered ${response.status}.`;
-    throw new ProviderError(reason, response.status === 429 ? 429 : 502);
+    traceProvider({ model: options.model, elapsedMs, status: response.status, error: reason });
+    // The status is passed through rather than flattened to 502, because the caller
+    // decides whether to try again from it: 429 and 5xx are worth another go, 400 is not.
+    throw new ProviderError(reason, PASSTHROUGH_STATUS.has(response.status) ? response.status : 502);
   }
 
   const payload = (await response.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>;
+    promptFeedback?: { blockReason?: string };
   };
-  const text = payload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('') ?? '';
+  const candidate = payload.candidates?.[0];
+  const text = candidate?.content?.parts?.map((part) => part.text ?? '').join('') ?? '';
+
+  if (!text.trim()) {
+    // An empty answer has a named cause worth repeating. A model that spent its whole
+    // token budget thinking reads as "unreadable JSON" otherwise, which sends whoever
+    // debugs it looking at the parser instead of at the budget.
+    const why = candidate?.finishReason ?? payload.promptFeedback?.blockReason ?? null;
+    traceProvider({
+      model: options.model,
+      elapsedMs,
+      status: 200,
+      error: `empty answer (${why ?? 'no reason given'})`,
+    });
+    throw new ProviderError(
+      why === 'MAX_TOKENS'
+        ? 'The transcription service ran out of room before it finished this part.'
+        : `The transcription service returned nothing${why ? ` (${why})` : ''}.`,
+      502,
+    );
+  }
+
+  traceProvider({ model: options.model, elapsedMs, status: 200, characters: text.length });
   return parseJson<T>(text);
 }
 

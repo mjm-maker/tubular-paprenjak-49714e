@@ -1,20 +1,31 @@
 'use client';
 
 import { formatBytes, formatDuration } from '@/lib/audio';
-import { describeAudioProof, describePipeline, type EncodeResult, type EncodeStage } from '@/lib/encode';
+import {
+  describeAudioProof,
+  describePipeline,
+  type EncodeResult,
+  type EncodeStage,
+  type ExportDiagnostics,
+  type Pipeline,
+} from '@/lib/encode';
 import { DEFAULT_FORMAT, describeFormat, type VideoFormat } from '@/lib/layout';
+import ExportDiagnosticsPanel from './ExportDiagnostics';
 import { AlertIcon, CheckIcon } from './Icons';
 
 /**
  * `stage` is the encoder's own progress; `label` is the plain-language step the page
  * wants shown, which can start before the encoder does ("Preparing audio" while the
  * mix is rendering, "Generating subtitles" if the transcript is still running).
+ *
+ * A failed export carries its diagnostics too, because the failures worth investigating
+ * are exactly the ones where no file was produced to read them off.
  */
 export type ExportState =
   | { phase: 'idle' }
   | { phase: 'working'; stage: EncodeStage; ratio: number; detail: string; label?: string }
   | { phase: 'done'; result: EncodeResult; filename: string }
-  | { phase: 'error'; message: string };
+  | { phase: 'error'; message: string; diagnostics?: ExportDiagnostics | null };
 
 interface ExportPanelProps {
   ready: boolean;
@@ -23,6 +34,13 @@ interface ExportPanelProps {
   state: ExportState;
   onGenerate: () => void;
   onCancel: () => void;
+  /**
+   * Dev-only extras. Absent in the normal product UI, which is why they are optional
+   * rather than a second panel the page has to place.
+   */
+  diagnostics?: boolean;
+  forcedPipeline?: Pipeline | null;
+  onForcePipeline?: (pipeline: Pipeline | null) => void;
 }
 
 const STAGE_LABEL: Record<EncodeStage, string> = {
@@ -40,6 +58,9 @@ export default function ExportPanel({
   state,
   onGenerate,
   onCancel,
+  diagnostics = false,
+  forcedPipeline = null,
+  onForcePipeline,
 }: ExportPanelProps) {
   const working = state.phase === 'working';
 
@@ -135,6 +156,22 @@ export default function ExportPanel({
           not use.
         </p>
       </div>
+
+      {diagnostics && onForcePipeline && (
+        <ExportDiagnosticsPanel
+          forced={forcedPipeline}
+          onForce={onForcePipeline}
+          disabled={working}
+          data={
+            state.phase === 'done'
+              ? state.result.diagnostics
+              : state.phase === 'error'
+                ? state.diagnostics ?? null
+                : null
+          }
+          failure={state.phase === 'error' ? state.message : null}
+        />
+      )}
     </section>
   );
 }

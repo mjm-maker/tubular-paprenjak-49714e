@@ -27,7 +27,14 @@ import {
   formatDuration,
   unlockAudioContext,
 } from '@/lib/audio';
-import { canExportMp4, encodeVideo } from '@/lib/encode';
+import {
+  audioProved,
+  canExportMp4,
+  encodeVideo,
+  ExportError,
+  PIPELINES,
+  type Pipeline,
+} from '@/lib/encode';
 import { DEFAULT_HEADLINE, headlineText, type HeadlineSettings } from '@/lib/headline';
 import { DEFAULT_FORMAT, formatById, type FormatId } from '@/lib/layout';
 import { type BrandLogo, loadBrandLogo } from '@/lib/logo';
@@ -151,6 +158,9 @@ export default function Home() {
   const [shareNotice, setShareNotice] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [exportSupported, setExportSupported] = useState(true);
+  // Dev-only, resolved from the URL in an effect below.
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [forcedPipeline, setForcedPipeline] = useState<Pipeline | null>(null);
 
   // Output shape and branding.
   const [formatId, setFormatId] = useState<FormatId>(DEFAULT_FORMAT.id);
@@ -210,6 +220,23 @@ export default function Home() {
   useEffect(() => {
     setShareSupported(canShareVideoFiles());
     setExportSupported(canExportMp4());
+  }, []);
+
+  // The dev-only export readout, and the switch that forces one pipeline.
+  //
+  // Read from the URL in an effect rather than at render, because `window` does not exist
+  // during the server render and a value that differs between the two is a hydration
+  // mismatch. `?diagnostics=1` is what makes the readout reachable on a Deploy Preview,
+  // where the build is a production build; `?pipeline=mediarecorder` forces one route so
+  // each of the three can be tested on its own rather than only whichever one this
+  // browser reaches for first. Neither appears in the normal product UI.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setShowDiagnostics(process.env.NODE_ENV !== 'production' || params.has('diagnostics'));
+    const forced = params.get('pipeline');
+    if (forced && (PIPELINES as readonly string[]).includes(forced)) {
+      setForcedPipeline(forced as Pipeline);
+    }
   }, []);
 
   // The logo the frame is branded with. Drawing is synchronous and loading is not,
@@ -870,6 +897,12 @@ export default function Home() {
         },
         audioContext,
         signal: controller.signal,
+        // The voice before the mix, for the diagnostics readout only — comparing its
+        // level with the mixed buffer's is what separates a silent recording from a
+        // mix that lost it, which look identical in the finished file.
+        voiceBuffer: source.buffer,
+        // Null unless the dev selector forced one route.
+        only: forcedPipeline,
         onProgress: ({ stage, ratio, detail }) =>
           setExportState({
             phase: 'working',
@@ -892,6 +925,9 @@ export default function Home() {
       setExportState({
         phase: 'error',
         message: (error as Error)?.message ?? 'The export failed. Try again.',
+        // An export that produced no file is the case where the measurements matter
+        // most, so they travel with the error rather than only with a result.
+        diagnostics: error instanceof ExportError ? error.diagnostics : null,
       });
     } finally {
       abortRef.current = null;
@@ -900,6 +936,7 @@ export default function Home() {
     buildSubtitles,
     cues,
     duck,
+    forcedPipeline,
     music,
     musicVolume,
     pausePreview,
@@ -931,8 +968,12 @@ export default function Home() {
    * return one that was not, so in practice this is always true — it is read here anyway
    * because a silent upload is the one failure that looks like a success, and the file
    * should not reach a share sheet on the strength of an assumption.
+   *
+   * `audioProved` rather than the proof's own `audible` flag, so this asks the same
+   * question the encoder asked: a file whose sound could only be inferred from the
+   * container, and never heard, does not count as proved.
    */
-  const videoAudible = exportState.phase !== 'done' || exportState.result.audio.audible;
+  const videoAudible = exportState.phase !== 'done' || audioProved(exportState.result);
 
   // A playable URL for the finished file, so the share section can show the real MP4.
   useEffect(() => {
@@ -955,7 +996,7 @@ export default function Home() {
     // on the same door rather than the first. It is here because a silent upload is the
     // failure that looks like a success, and a file that reached this point unproven
     // should leave through an explanation, not through the downloads folder.
-    if (!exportState.result.audio.audible) {
+    if (!audioProved(exportState.result)) {
       setShareNotice(
         'This video came out without audible sound, so it was not saved. Generate it again.',
       );
@@ -1223,6 +1264,9 @@ export default function Home() {
             state={exportState}
             onGenerate={generate}
             onCancel={cancel}
+            diagnostics={showDiagnostics}
+            forcedPipeline={forcedPipeline}
+            onForcePipeline={setForcedPipeline}
           />
 
           {exportState.phase === 'done' && (

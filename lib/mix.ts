@@ -33,7 +33,13 @@ export const MUSIC_FADE_SECONDS = 1.2;
  */
 export const MIX_CHANNELS = 2;
 export const PLATFORM_SAMPLE_RATE = 48_000;
-const ACCEPTED_SAMPLE_RATES = [48_000, 44_100];
+/**
+ * Exported so the encoder can refuse a rate it would have to describe wrongly.
+ * `mp4-muxer` names the sample rate by index in the AAC decoder configuration, and a
+ * rate that has no index there is written as a corrupt one — a track whose header and
+ * whose own configuration disagree, which players decode as silence.
+ */
+export const ACCEPTED_SAMPLE_RATES: readonly number[] = [48_000, 44_100];
 
 /** How far the music is pulled down while the voice is actually speaking. */
 export const DUCK_DEPTH = 0.62;

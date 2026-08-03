@@ -21,9 +21,13 @@ import {
   type AudioAnalysis,
 } from './analysis';
 import { DEFAULT_FORMAT, layoutFor } from './layout';
+import { ACCEPTED_SAMPLE_RATES, MIX_CHANNELS } from './mix';
+import { judgeMp4Audio, probeMp4Audio, type Mp4AudioTrack } from './mp4probe';
 import { drawFrame, type RenderSpec } from './render';
 
 export type Pipeline = 'webcodecs' | 'mediarecorder' | 'ffmpeg';
+
+export const PIPELINES: readonly Pipeline[] = ['webcodecs', 'mediarecorder', 'ffmpeg'];
 
 export type EncodeStage = 'render' | 'record' | 'convert' | 'package' | 'verify';
 
@@ -45,6 +49,102 @@ export interface EncodeResult {
   height: number;
   /** What the audibility check found in the finished file. */
   audio: AudioProof;
+  /** Everything measured on the way here. Shown by the dev-only diagnostics panel. */
+  diagnostics: ExportDiagnostics;
+}
+
+/** Peak and RMS of one buffer, as reported to the diagnostics readout. */
+export interface LevelReading {
+  peak: number;
+  rms: number;
+}
+
+/** What one pipeline attempt produced, and why it was or was not accepted. */
+export interface PipelineAttempt {
+  pipeline: Pipeline;
+  accepted: boolean;
+  /** Milliseconds this attempt took. */
+  elapsedMs: number;
+  /** Bytes produced, or 0 where it never got that far. */
+  bytes: number;
+  /** How the finished file was checked, where it got that far. */
+  method: AudioProof['method'] | null;
+  /** Exactly why it was rejected. Null when it was accepted. */
+  reason: string | null;
+}
+
+/**
+ * Everything measured during an export, in one record.
+ *
+ * This exists because the bug it was written for was invisible from the outside: the
+ * export succeeded, the file downloaded, and the only way to tell what had gone wrong was
+ * to instrument each stage and compare. Attached to the result, and to the error when
+ * every pipeline fails, so the dev-only panel can show the whole chain rather than a
+ * verdict. Never shown in the normal production UI — see `SHOW_DIAGNOSTICS` in the page.
+ */
+export interface ExportDiagnostics {
+  /** User agent, trimmed to the part worth reading. */
+  browser: string;
+  /** Which pipelines this browser can actually run. */
+  available: Pipeline[];
+  /** Forced by the dev selector, when it was. */
+  requested: Pipeline | null;
+  /** The pipeline whose file was accepted, or null when none was. */
+  pipeline: Pipeline | null;
+  /** The voice recording as decoded from the microphone or the uploaded file. */
+  source: {
+    sampleRate: number;
+    channels: number;
+    seconds: number;
+  } & LevelReading;
+  /** The mixed stereo buffer handed to the encoder, and each of its channels. */
+  mixed: {
+    sampleRate: number;
+    channels: number;
+    seconds: number;
+    channelLevels: LevelReading[];
+  } & LevelReading;
+  /** What the AAC encoder was actually configured with, once one was configured. */
+  encoder: {
+    codec: string;
+    sampleRate: number;
+    channels: number;
+    bitrate: number;
+    /** Whether `AudioEncoder.isConfigSupported` said yes. */
+    configSupported: boolean;
+  } | null;
+  /** Audio packets the encoder emitted, and how many reached the muxer. */
+  audioChunks: number;
+  audioChunksMuxed: number;
+  /** Bytes of AAC decoder description the encoder supplied. Zero means none. */
+  decoderDescriptionBytes: number;
+  /** Whether `AudioEncoder.flush()` completed. */
+  audioFlushed: boolean;
+  /** Seconds of audio the encoder's own packet timestamps covered. */
+  encodedAudioSeconds: number;
+  expectedSeconds: number;
+  /** What the finished file measured. Zero where it could not be measured. */
+  decodedSeconds: number;
+  exported: LevelReading;
+  /** The finished file's own audio track, read out of its boxes. */
+  exportedTrack: Mp4AudioTrack | null;
+  /** Every pipeline tried, in order, with the exact reason each was rejected. */
+  attempts: PipelineAttempt[];
+}
+
+const EMPTY_LEVEL: LevelReading = { peak: 0, rms: 0 };
+
+/** A short, readable browser name for the diagnostics readout. */
+function browserName(): string {
+  const agent = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  if (!agent) return 'unknown';
+  const match =
+    /(Edg|OPR|Chrome|CriOS|Firefox|FxiOS|Version)\/([\d.]+)/.exec(agent) ?? null;
+  const isSafari = /Safari/.test(agent) && !/Chrome|CriOS|Edg|OPR/.test(agent);
+  const platform = /iPhone|iPad/.test(agent) ? 'iOS' : /Android/.test(agent) ? 'Android' : /Mac OS X/.test(agent) ? 'macOS' : /Windows/.test(agent) ? 'Windows' : 'other';
+  if (!match) return `unknown (${platform})`;
+  const name = isSafari ? 'Safari' : match[1] === 'CriOS' ? 'Chrome' : match[1] === 'FxiOS' ? 'Firefox' : match[1] === 'Edg' ? 'Edge' : match[1] === 'OPR' ? 'Opera' : match[1];
+  return `${name} ${match[2].split('.')[0]} (${platform})`;
 }
 
 export interface EncodeOptions {
@@ -54,6 +154,23 @@ export interface EncodeOptions {
   onProgress: (progress: EncodeProgress) => void;
   signal?: AbortSignal;
   /**
+   * The voice recording before the mix, for the diagnostics readout only.
+   *
+   * Comparing its peak and RMS with the mixed buffer's is what tells a silent export
+   * caused by a bad recording apart from one caused by the mix, which are the same
+   * symptom and completely different bugs.
+   */
+  voiceBuffer?: AudioBuffer | null;
+  /**
+   * Run only this pipeline instead of trying all three in order.
+   *
+   * The dev-only diagnostics panel sets this, because "the export works" is three
+   * separate claims and the fallback chain hides which of them is true. A forced pipeline
+   * that fails its audio check fails the export rather than falling through, so the
+   * failure is attributable.
+   */
+  only?: Pipeline | null;
+  /**
    * An AudioContext already started inside the user gesture that began the export.
    *
    * Only the real-time pipelines need one, and by the time they run the gesture is long
@@ -62,6 +179,19 @@ export interface EncodeOptions {
    * it down; a missing one is still handled, it is just the case that fails on a phone.
    */
   audioContext?: AudioContext | null;
+}
+
+/** An export that failed, carrying everything measured on the way to failing. */
+export class ExportError extends Error {
+  // Written out longhand rather than as a constructor parameter property, so plain
+  // `node --experimental-strip-types` can import this module for `npm run export:check`.
+  readonly diagnostics: ExportDiagnostics;
+
+  constructor(message: string, diagnostics: ExportDiagnostics) {
+    super(message);
+    this.name = 'ExportError';
+    this.diagnostics = diagnostics;
+  }
 }
 
 const AUDIO_BITRATE = 128_000;
@@ -96,8 +226,15 @@ const EXPORT_CHANNELS = 2;
  */
 const MIN_AUDIO_COVERAGE = 0.9;
 
-/** Codec signatures the muxers write into the file header for an audio track. */
-const MP4_AUDIO_SIGNATURES = ['mp4a', 'Opus'];
+/**
+ * Codec signatures a muxer writes into the file header for an audio track.
+ *
+ * Only used on the intermediate WebM the ffmpeg route records, where the point is to
+ * refuse to spend minutes transcoding a recording that has no audio track at all. The
+ * finished MP4 is never judged this way: `lib/mp4probe.ts` reads its actual audio track,
+ * because `mp4a` appears in the sample description of a silent track exactly as it does
+ * in a good one, and treating that string as proof is what let silent exports through.
+ */
 const WEBM_AUDIO_SIGNATURES = ['A_OPUS', 'A_VORBIS', 'A_AAC'];
 
 /** Bytes inspected at each end of the file when looking for that signature. */
@@ -213,20 +350,21 @@ function indexOfAscii(bytes: Uint8Array, needle: string): number {
 }
 
 /**
- * Does the finished file actually carry an audio track?
+ * Does this intermediate WebM recording carry an audio track at all?
  *
- * Every pipeline here believes it muxed the voice in, and a silent export is exactly
- * the case where that belief is wrong — so the last word goes to the bytes rather than
- * to the encoder that produced them. Each container names its audio codec in the
- * header (`mp4a` in the MP4 sample description, `A_OPUS` in the WebM track entry), so
- * finding that string is enough to know a track was written at all.
+ * Used on the WebM the ffmpeg route captures, before the transcode: ffmpeg would happily
+ * spend minutes turning a soundless recording into a soundless MP4. WebM names its audio
+ * codec in the track entry (`A_OPUS`), so finding that string is enough to know a track
+ * was written. Both ends are scanned because MediaRecorder may put its metadata at either.
  *
- * Both ends are scanned because MediaRecorder may put its metadata at either one, and
- * an unreadable file is treated as fine: this check exists to catch a missing track,
- * not to become a new way for the export to fail.
+ * There is deliberately no MP4 equivalent any more. Searching a finished MP4 for `mp4a`
+ * was the check that let silent exports through, and it is gone rather than kept for a
+ * second opinion — `lib/mp4probe.ts` reads the real track instead. An unreadable file is
+ * treated as *not* having a track: guessing "probably fine" here is what a silent export
+ * looks like from the inside.
  */
-async function hasAudioTrack(blob: Blob, mimeType: string): Promise<boolean> {
-  const signatures = mimeType.includes('webm') ? WEBM_AUDIO_SIGNATURES : MP4_AUDIO_SIGNATURES;
+async function hasAudioTrack(blob: Blob): Promise<boolean> {
+  const signatures = WEBM_AUDIO_SIGNATURES;
   try {
     const head = new Uint8Array(
       await blob.slice(0, Math.min(blob.size, SIGNATURE_SCAN_BYTES)).arrayBuffer(),
@@ -238,27 +376,45 @@ async function hasAudioTrack(blob: Blob, mimeType: string): Promise<boolean> {
     );
     return signatures.some((signature) => indexOfAscii(tail, signature) !== -1);
   } catch {
-    return true;
+    return false;
   }
 }
 
 /** How the finished file's audio was checked, and what was found. */
 export interface AudioProof {
+  /**
+   * Whether this file was *proved* to carry sound.
+   *
+   * Only ever true off a measurement of the finished bytes — `decoded` or `stream`. It is
+   * never true because a check could not be run: an export that cannot be verified is
+   * rejected so the next pipeline gets a turn, because the alternative is what this whole
+   * module exists to prevent. A file that downloads, plays, and is silent is the one
+   * failure indistinguishable from success.
+   */
   audible: boolean;
   /**
    * `decoded` — the file's own audio track was decoded back to samples and measured.
-   * `captured` — the decode was unavailable, so the track was measured live off the
-   *   very MediaStream the recorder was writing.
-   * `container` — only the container's audio-track signature could be checked.
-   * `too-large` — decoding would have needed more memory than it is worth.
-   * `undecodable` — this browser cannot decode what it just wrote.
+   *   The strongest proof there is, and the only one that knows how loud the audio is.
+   * `stream` — the decode was unavailable, so the file's AAC frame table was measured
+   *   instead: a well-formed, correctly described, full-length AAC-LC track whose frames
+   *   are far too large to be digital silence. Decoder-free, and therefore available on
+   *   the engines least able to read back what they wrote.
+   * `container` — the file has no audio track at all.
+   * `malformed` — it has one no player would get sound out of.
+   * `undecodable` — this browser could not decode what it just wrote, and the frame
+   *   table did not vouch for it either.
+   * `too-large` — the file was past the point where decoding it is affordable.
    */
-  method: 'decoded' | 'captured' | 'container' | 'too-large' | 'undecodable';
+  method: 'decoded' | 'stream' | 'container' | 'malformed' | 'undecodable' | 'too-large';
   /** Loudest sample found, 0..1. Zero when the method was not `decoded`. */
   peak: number;
   rms: number;
-  /** Seconds of audio the decoder found. */
+  /** Seconds of audio found — decoded where possible, otherwise from the track header. */
   seconds: number;
+  /** Why the file was refused, when it was. Null when it passed. */
+  reason: string | null;
+  /** The decoder-free reading of the file's own audio track, where there was one. */
+  track: Mp4AudioTrack | null;
 }
 
 /**
@@ -270,12 +426,22 @@ const AUDIBLE_PEAK = 0.005;
 const AUDIBLE_RMS = 0.0004;
 
 /**
- * Above this the decode is skipped: `decodeAudioData` expands the whole track to
- * 32-bit PCM, which for a three-minute stereo clip is tens of megabytes on top of a
- * copy of the file itself. The container check still runs, so a long export is
- * verified less deeply rather than not at all.
+ * Past this size the file is not decoded. Set above the largest MP4 this app can
+ * produce — `MAX_DURATION_SECONDS` of video at the lowest bitrate tier plus its audio is
+ * comfortably under 100 MB — so a real export always gets the full check, and the ceiling
+ * only exists so a pathological file cannot exhaust memory trying to prove itself.
  */
-const MAX_DECODE_BYTES = 64 * 1024 * 1024;
+const MAX_DECODE_BYTES = 192 * 1024 * 1024;
+
+/**
+ * Sample rate the verification decode runs at.
+ *
+ * `decodeAudioData` resamples to its context's rate, so asking for a low one is the
+ * difference between holding 69 MB of 48 kHz stereo float for a three-minute clip and
+ * holding 23 MB. Every frequency speech puts its energy into is well under half of this,
+ * so peak and RMS survive the resample — which is all this measurement is for.
+ */
+const VERIFY_SAMPLE_RATE = 16_000;
 
 /** Peak and RMS of a buffer, measured across every channel. */
 function measureBuffer(buffer: AudioBuffer): { peak: number; rms: number } {
@@ -296,20 +462,143 @@ function measureBuffer(buffer: AudioBuffer): { peak: number; rms: number } {
   return { peak, rms: counted > 0 ? Math.sqrt(sumSquares / counted) : 0 };
 }
 
+/** Peak and RMS of one channel, so a mono buffer that was not duplicated shows up. */
+export function measureChannels(buffer: AudioBuffer): Array<{ peak: number; rms: number }> {
+  const out: Array<{ peak: number; rms: number }> = [];
+  for (let c = 0; c < buffer.numberOfChannels; c++) {
+    let peak = 0;
+    let sumSquares = 0;
+    let counted = 0;
+    const data = buffer.getChannelData(c);
+    for (let i = 0; i < data.length; i += 7) {
+      const value = Math.abs(data[i]);
+      if (value > peak) peak = value;
+      sumSquares += data[i] * data[i];
+      counted++;
+    }
+    out.push({ peak, rms: counted > 0 ? Math.sqrt(sumSquares / counted) : 0 });
+  }
+  return out;
+}
+
+type AudioCtor = typeof AudioContext;
+
+function audioContextCtor(): AudioCtor | undefined {
+  if (typeof AudioContext !== 'undefined') return AudioContext;
+  return (globalThis as unknown as { webkitAudioContext?: AudioCtor }).webkitAudioContext;
+}
+
 /**
- * Decode the finished MP4's own audio track and confirm there is sound in it.
+ * Decode compressed audio, whichever of the two APIs this browser has.
  *
- * The pipelines already prove that an audio track was written, that its packets
- * carry a decoder description, and that they reach the end of the clip. None of
- * that proves the samples are not all zeroes — which is what a muted microphone, a
- * suspended audio context or a header/sample mismatch actually produces. So the
- * last check listens: hand the exported bytes back to the browser as if it were a
- * downloaded file, decode them, and measure.
+ * Safari has supported the promise form for years and still honours only the callback
+ * form on some builds, where `decodeAudioData` returns `undefined` — and awaiting that
+ * yields `undefined` rather than throwing, so the caller measures nothing and concludes
+ * the file could not be decoded. `lib/audio.ts` has always handled both forms for the
+ * *input* file; the verifier did not, which is why on Safari it never really ran: every
+ * export came back `undecodable`, and `undecodable` was treated as good enough.
+ */
+function decodeAudioCompat(context: BaseAudioContext, bytes: ArrayBuffer): Promise<AudioBuffer> {
+  return new Promise<AudioBuffer>((resolve, reject) => {
+    let settled = false;
+    const ok = (buffer: AudioBuffer | undefined) => {
+      if (settled) return;
+      if (!buffer) {
+        settled = true;
+        reject(new Error('the decoder returned nothing'));
+        return;
+      }
+      settled = true;
+      resolve(buffer);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      reject(error instanceof Error ? error : new Error('the file could not be decoded'));
+    };
+    let maybePromise: Promise<AudioBuffer> | undefined;
+    try {
+      maybePromise = context.decodeAudioData(bytes, ok, fail) as
+        | Promise<AudioBuffer>
+        | undefined;
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    if (maybePromise && typeof maybePromise.then === 'function') {
+      maybePromise.then(ok, fail);
+    }
+  });
+}
+
+/**
+ * Decode the finished file's audio, cheaply, using whatever context is available.
  *
- * Fails open. A browser that cannot decode its own AAC output (Firefox, depending on
- * the platform's codecs) reports `undecodable` and the export still succeeds on the
- * strength of the container checks — refusing to export because the *verifier* is
- * unsupported would be a worse bug than the one it is looking for.
+ * An `OfflineAudioContext` is preferred: it can be pinned to a low sample rate, which is
+ * where most of the memory saving comes from, and it does not count against the number of
+ * live audio contexts iOS allows. The page's own context is the fallback, and a fresh one
+ * the last resort.
+ */
+async function decodeForVerification(
+  bytes: ArrayBuffer,
+  sharedContext?: AudioContext | null,
+): Promise<AudioBuffer | null> {
+  const OfflineCtor =
+    typeof OfflineAudioContext !== 'undefined'
+      ? OfflineAudioContext
+      : (globalThis as unknown as { webkitOfflineAudioContext?: typeof OfflineAudioContext })
+          .webkitOfflineAudioContext;
+
+  const attempts: Array<() => BaseAudioContext | null> = [
+    () => (OfflineCtor ? new OfflineCtor(1, 1, VERIFY_SAMPLE_RATE) : null),
+    () => sharedContext ?? null,
+    () => {
+      const Ctor = audioContextCtor();
+      return Ctor ? new Ctor() : null;
+    },
+  ];
+
+  for (const open of attempts) {
+    let context: BaseAudioContext | null = null;
+    try {
+      context = open();
+    } catch {
+      context = null;
+    }
+    if (!context) continue;
+    try {
+      // A fresh copy each time: `decodeAudioData` detaches the buffer it is given, so a
+      // second attempt against the same one would fail for the wrong reason.
+      return await decodeAudioCompat(context, bytes.slice(0));
+    } catch {
+      // Try the next context.
+    } finally {
+      if (context !== sharedContext && context instanceof AudioContext) {
+        void context.close().catch(() => {});
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Prove the finished MP4 carries audible sound, or say why it does not.
+ *
+ * Two independent measurements of the same bytes, in order of how much they know:
+ *
+ *  1. The file's own audio track, read out of its boxes (`lib/mp4probe.ts`). This settles
+ *     everything structural — is there a track, is it AAC-LC, does its header agree with
+ *     its decoder configuration, does it reach the end of the clip, are its frames big
+ *     enough to hold any signal at all. No decoder needed, so it works on the engines
+ *     that cannot read back their own output.
+ *  2. The samples themselves, decoded. The only measurement that knows how *loud* the
+ *     audio is, and therefore the one that catches a track full of well-formed frames of
+ *     near-nothing.
+ *
+ * Fails closed, which is the whole point of this rewrite. Where a check cannot be run the
+ * answer is "not proved", never "probably fine": the caller's response to an unproved
+ * file is to try the next pipeline, and the last pipeline's failure is an error message
+ * rather than a silent download.
  */
 export async function verifyExportedAudio(
   blob: Blob,
@@ -317,56 +606,160 @@ export async function verifyExportedAudio(
   expectedSeconds: number,
   sharedContext?: AudioContext | null,
 ): Promise<AudioProof> {
-  const container = await hasAudioTrack(blob, mimeType);
-  if (!container) {
-    return { audible: false, method: 'container', peak: 0, rms: 0, seconds: 0 };
-  }
+  const isMp4 = !mimeType.includes('webm');
+
+  // Nothing below can run without the whole file in memory, so the size gate comes before
+  // the read rather than after it. `too-large` is a rejection like any other — it used to
+  // be reported as verified sound, which meant the longest exports were the ones never
+  // checked at all. The ceiling sits well above any in-spec export (`MAX_DURATION_SECONDS`
+  // is 180), so reaching it means something else has gone wrong.
   if (blob.size > MAX_DECODE_BYTES) {
-    return { audible: true, method: 'too-large', peak: 0, rms: 0, seconds: 0 };
+    return {
+      audible: false,
+      method: 'too-large',
+      peak: 0,
+      rms: 0,
+      seconds: 0,
+      reason: `the exported file is ${(blob.size / 1024 / 1024).toFixed(0)} MB, too large to verify`,
+      track: null,
+    };
   }
 
-  type AudioCtor = typeof AudioContext;
-  const Ctor: AudioCtor | undefined =
-    typeof AudioContext !== 'undefined'
-      ? AudioContext
-      : (globalThis as unknown as { webkitAudioContext?: AudioCtor }).webkitAudioContext;
-  // The page's own context is reused when it was handed down, because iOS caps how many
-  // may be alive at once and the export has already opened one to play the voice.
-  const context = sharedContext ?? (Ctor ? new Ctor() : null);
-  if (!context) return { audible: true, method: 'undecodable', peak: 0, rms: 0, seconds: 0 };
+  // --- 1. the file's own audio track ---------------------------------------
+  let track: Mp4AudioTrack | null = null;
+  let structuralReason: string | null = null;
+  let structuralOk = false;
+  // Read once and reused by the decode below: a three-minute export is the better part of
+  // a hundred megabytes, and reading it twice is a hundred megabytes of a phone's memory
+  // spent on nothing.
+  let bytes: ArrayBuffer | null = null;
+  if (isMp4) {
+    try {
+      bytes = await blob.arrayBuffer();
+      const probe = probeMp4Audio(bytes);
+      const verdict = judgeMp4Audio(
+        probe,
+        expectedSeconds,
+        MIN_AUDIO_COVERAGE,
+        ACCEPTED_SAMPLE_RATES,
+        EXPORT_CHANNELS,
+      );
+      track = verdict.track;
+      structuralOk = verdict.ok;
+      structuralReason = verdict.reason;
+      if (!verdict.ok && (!probe.parsed || !probe.track)) {
+        return {
+          audible: false,
+          method: 'container',
+          peak: 0,
+          rms: 0,
+          seconds: 0,
+          reason: verdict.reason,
+          track,
+        };
+      }
+      if (!verdict.ok) {
+        return {
+          audible: false,
+          method: 'malformed',
+          peak: 0,
+          rms: 0,
+          seconds: track?.seconds ?? 0,
+          reason: verdict.reason,
+          track,
+        };
+      }
+    } catch {
+      return {
+        audible: false,
+        method: 'container',
+        peak: 0,
+        rms: 0,
+        seconds: 0,
+        reason: 'the exported file could not be read back to check it',
+        track: null,
+      };
+    }
+  } else if (!(await hasAudioTrack(blob))) {
+    return {
+      audible: false,
+      method: 'container',
+      peak: 0,
+      rms: 0,
+      seconds: 0,
+      reason: 'the recording has no audio track in it',
+      track: null,
+    };
+  }
 
-  try {
-    const bytes = await blob.arrayBuffer();
-    const decoded = await context.decodeAudioData(bytes);
+  // --- 2. the samples ------------------------------------------------------
+  const decoded = await decodeForVerification(bytes ?? (await blob.arrayBuffer()), sharedContext);
+  if (decoded) {
     const { peak, rms } = measureBuffer(decoded);
     const longEnough = decoded.duration >= expectedSeconds * MIN_AUDIO_COVERAGE;
+    const loudEnough = peak >= AUDIBLE_PEAK && rms >= AUDIBLE_RMS;
+    const reason = !loudEnough
+      ? `the exported audio decoded to silence (peak ${peak.toFixed(4)}, RMS ${rms.toFixed(5)})`
+      : !longEnough
+        ? `the exported audio is ${decoded.duration.toFixed(1)}s of an expected ${expectedSeconds.toFixed(1)}s`
+        : null;
     return {
-      audible: peak >= AUDIBLE_PEAK && rms >= AUDIBLE_RMS && longEnough,
+      audible: loudEnough && longEnough,
       method: 'decoded',
       peak,
       rms,
       seconds: decoded.duration,
+      reason,
+      track,
     };
-  } catch {
-    return { audible: true, method: 'undecodable', peak: 0, rms: 0, seconds: 0 };
-  } finally {
-    if (context !== sharedContext) void context.close().catch(() => {});
   }
+
+  // The decode was unavailable — not the same thing as the file being silent, and not the
+  // same thing as it being fine either. The frame table is a real measurement of the real
+  // bytes, so it stands on its own here; `encodeVideo` still refuses to accept it from
+  // the pipeline that has actually been producing silent files.
+  if (structuralOk && track) {
+    return {
+      audible: true,
+      method: 'stream',
+      peak: 0,
+      rms: 0,
+      seconds: track.seconds,
+      reason: null,
+      track,
+    };
+  }
+
+  return {
+    audible: false,
+    method: 'undecodable',
+    peak: 0,
+    rms: 0,
+    seconds: track?.seconds ?? 0,
+    reason: structuralReason ?? 'this browser could not decode the file it just wrote',
+    track,
+  };
 }
 
 /** Human-readable summary of the proof, shown next to the finished file. */
 export function describeAudioProof(proof: AudioProof): string {
   switch (proof.method) {
     case 'decoded':
-      return `Audio verified — decoded ${proof.seconds.toFixed(1)}s, peak ${proof.peak.toFixed(2)}`;
-    case 'captured':
-      return `Audio verified — the recorded track carried sound, peak ${proof.peak.toFixed(2)}`;
-    case 'too-large':
-      return 'Audio track confirmed in the container (file too large to decode here)';
-    case 'undecodable':
-      return 'Audio track confirmed in the container (this browser cannot decode MP4 audio)';
+      return proof.audible
+        ? `Audio verified — decoded ${proof.seconds.toFixed(1)}s, peak ${proof.peak.toFixed(2)}, RMS ${proof.rms.toFixed(3)}`
+        : `Audio check failed — ${proof.reason ?? 'the exported file decoded to silence'}`;
+    case 'stream':
+      return `Audio verified — ${proof.seconds.toFixed(1)}s of stereo AAC-LC at ${
+        (proof.track?.sampleRate ?? 0) / 1000
+      } kHz, ${Math.round(proof.track?.meanSampleBytes ?? 0)} bytes per frame`;
+    case 'malformed':
+      return `Audio check failed — ${proof.reason ?? 'the audio track is unplayable'}`;
     case 'container':
-      return 'No audio track found in the container';
+      return `Audio check failed — ${proof.reason ?? 'no audio track found in the file'}`;
+    case 'undecodable':
+      return `Audio check failed — ${proof.reason ?? 'this browser could not decode the file'}`;
+    case 'too-large':
+      return `Audio check failed — ${proof.reason ?? 'the file was too large to verify'}`;
   }
 }
 
@@ -413,15 +806,46 @@ async function pickVideoConfig(
   return null;
 }
 
+/**
+ * `AudioEncoderConfig` plus the member the AAC registration adds, which the DOM types do
+ * not carry yet.
+ */
+interface AacAudioEncoderConfig extends AudioEncoderConfig {
+  /**
+   * `'aac'` means raw AAC frames, which is what an MP4 sample table has to hold. `'adts'`
+   * wraps each frame in a seven-byte sync header — correct for a bare `.aac` stream, and
+   * unplayable inside an MP4, where the sample description already says what the frames
+   * are. A player handed ADTS frames in an `mp4a` track produces silence rather than an
+   * error. The registration defaults this to `'aac'`, but a default is exactly the sort of
+   * thing an implementation gets wrong, and saying it outright costs nothing.
+   */
+  aac?: { format: 'aac' | 'adts' };
+}
+
+/** What the audio half of the WebCodecs pipeline did, for the diagnostics readout. */
+interface AudioAccounting {
+  /** Packets the encoder emitted. */
+  chunks: number;
+  /** Packets that reached the muxer. Any gap between the two is the bug. */
+  muxed: number;
+  descriptionBytes: number;
+  flushed: boolean;
+  /** Seconds the packet timestamps covered. */
+  seconds: number;
+  encoder: ExportDiagnostics['encoder'];
+}
+
 async function pickAudioConfig(
   sampleRate: number,
   numberOfChannels: number,
-): Promise<AudioEncoderConfig | null> {
-  const config: AudioEncoderConfig = {
+): Promise<AacAudioEncoderConfig | null> {
+  const config: AacAudioEncoderConfig = {
     codec: 'mp4a.40.2',
     sampleRate,
     numberOfChannels,
     bitrate: AUDIO_BITRATE,
+    bitrateMode: 'constant',
+    aac: { format: 'aac' },
   };
   try {
     const support = await AudioEncoder.isConfigSupported(config);
@@ -434,10 +858,23 @@ async function pickAudioConfig(
   } catch {
     // Fall through.
   }
+  // Constant bitrate mode is the likeliest thing in there to be unsupported, and it is
+  // the least important, so it is dropped before the configuration is given up on.
+  try {
+    const relaxed: AacAudioEncoderConfig = { ...config };
+    delete relaxed.bitrateMode;
+    const support = await AudioEncoder.isConfigSupported(relaxed);
+    if (support.supported) return relaxed;
+  } catch {
+    // Fall through.
+  }
   return null;
 }
 
-async function encodeWithWebCodecs(options: EncodeOptions): Promise<Blob | null> {
+async function encodeWithWebCodecs(
+  options: EncodeOptions,
+  account: AudioAccounting,
+): Promise<Blob | null> {
   const { audioBuffer, analysis, spec, onProgress, signal } = options;
   if (!webCodecsAvailable()) return null;
 
@@ -447,11 +884,36 @@ async function encodeWithWebCodecs(options: EncodeOptions): Promise<Blob | null>
   const readChannel = (index: number) =>
     audioBuffer.getChannelData(Math.min(index, audioBuffer.numberOfChannels - 1));
 
+  // The sample rate has to be one the AAC decoder configuration can name by index.
+  // `mp4-muxer` writes that configuration from the rate it is given, and a rate with no
+  // index gets written as a corrupt one — an audio track whose header says 47,999 Hz while
+  // its own configuration claims AAC object type 1 at 88,200 Hz. That file has an audio
+  // track, contains `mp4a`, and is silent. `lib/mix.ts` already normalises to 48 or 44.1
+  // kHz, so this is the assertion that keeps it that way rather than a conversion.
+  if (!ACCEPTED_SAMPLE_RATES.includes(audioBuffer.sampleRate)) {
+    throw new Error(
+      `the mixed audio is at ${audioBuffer.sampleRate} Hz, which cannot be described in an MP4 audio track`,
+    );
+  }
+
   const [videoConfig, audioConfig] = await Promise.all([
     pickVideoConfig(videoBitrateFor(analysis.duration), width, height),
     pickAudioConfig(audioBuffer.sampleRate, channels),
   ]);
-  if (!videoConfig || !audioConfig) return null;
+  if (!videoConfig) return null;
+  if (!audioConfig) {
+    // Not a null return: a browser with a video encoder and no AAC encoder would otherwise
+    // look like "WebCodecs unavailable", when what actually happened is the one thing this
+    // module cares about.
+    throw new Error('this browser has no AAC audio encoder');
+  }
+  account.encoder = {
+    codec: audioConfig.codec,
+    sampleRate: audioConfig.sampleRate,
+    channels: audioConfig.numberOfChannels,
+    bitrate: audioConfig.bitrate ?? AUDIO_BITRATE,
+    configSupported: true,
+  };
 
   const { Muxer, ArrayBufferTarget } = await import('mp4-muxer');
   const target = new ArrayBufferTarget();
@@ -475,14 +937,13 @@ async function encodeWithWebCodecs(options: EncodeOptions): Promise<Blob | null>
 
   let failure: Error | null = null;
   // The audio track is the thing most easily lost on the way into the container, so it
-  // is accounted for rather than assumed: how many packets arrived, whether the decoder
-  // description that makes them playable came with them, and how far they reach.
+  // is accounted for rather than assumed: how many packets the encoder emitted, how many
+  // the muxer actually took, whether the decoder description that makes them playable came
+  // with them, and how far they reach.
   //
-  // The description matters more than it looks. The muxer writes the AAC `esds`
-  // descriptor straight from it, and given nothing it writes an empty one without
-  // complaint — a file that carries every audio packet, plays back, and is silent.
-  let audioChunkCount = 0;
-  let audioDescribed = false;
+  // The description matters more than it looks. The muxer writes the AAC `esds` descriptor
+  // from it, and given nothing falls back to guessing one from the configured rate and
+  // channel count — a guess that is right often enough to hide the times it is not.
   let audioEndMicroseconds = 0;
   const videoEncoder = new VideoEncoder({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
@@ -492,13 +953,21 @@ async function encodeWithWebCodecs(options: EncodeOptions): Promise<Blob | null>
   });
   const audioEncoder = new AudioEncoder({
     output: (chunk, meta) => {
-      audioChunkCount++;
-      if ((meta?.decoderConfig?.description?.byteLength ?? 0) > 0) audioDescribed = true;
+      account.chunks++;
+      const described = meta?.decoderConfig?.description?.byteLength ?? 0;
+      if (described > 0) account.descriptionBytes = described;
       audioEndMicroseconds = Math.max(
         audioEndMicroseconds,
         chunk.timestamp + (chunk.duration ?? 0),
       );
-      muxer.addAudioChunk(chunk, meta);
+      try {
+        muxer.addAudioChunk(chunk, meta);
+        account.muxed++;
+      } catch (error) {
+        // A packet the muxer refused is a packet missing from the file. Recorded rather
+        // than swallowed, because the gap between `chunks` and `muxed` is the diagnosis.
+        failure = error as Error;
+      }
     },
     error: (error) => {
       failure = error;
@@ -597,30 +1066,54 @@ async function encodeWithWebCodecs(options: EncodeOptions): Promise<Blob | null>
     onProgress({ stage: 'package', ratio: 0.9, detail: 'Writing the MP4 container' });
     await videoEncoder.flush();
     await audioEncoder.flush();
+    account.flushed = true;
     checkFailure();
 
     // Refuse to finish a video whose sound went missing, so the orchestrator falls
     // through to a pipeline that does carry it instead of handing back a silent file.
-    if (audioChunkCount === 0) {
+    if (account.chunks === 0) {
       throw new Error('the AAC encoder produced no audio packets');
     }
-    if (!audioDescribed) {
-      throw new Error('the AAC encoder gave no decoder description, so the track would be silent');
-    }
-    const audioSeconds = audioEndMicroseconds / 1_000_000;
-    if (audioSeconds < audioBuffer.duration * MIN_AUDIO_COVERAGE) {
+    if (account.muxed < account.chunks) {
       throw new Error(
-        `the audio track covered only ${audioSeconds.toFixed(1)}s of ${audioBuffer.duration.toFixed(1)}s`,
+        `the container took only ${account.muxed} of ${account.chunks} audio packets`,
+      );
+    }
+    if (account.descriptionBytes === 0) {
+      throw new Error(
+        'the AAC encoder gave no decoder description, so the container would have to guess the ' +
+          "track's configuration",
+      );
+    }
+    account.seconds = audioEndMicroseconds / 1_000_000;
+    if (account.seconds < audioBuffer.duration * MIN_AUDIO_COVERAGE) {
+      throw new Error(
+        `the audio track covered only ${account.seconds.toFixed(1)}s of ${audioBuffer.duration.toFixed(1)}s`,
       );
     }
 
     muxer.finalize();
 
-    const blob = new Blob([target.buffer], { type: 'video/mp4' });
-    if (!(await hasAudioTrack(blob, 'video/mp4'))) {
-      throw new Error('the finished MP4 had no audio track');
+    // The bytes get the last word over the accounting above. Everything up to here
+    // describes what was handed *to* the muxer; this reads what the muxer actually wrote,
+    // which is what a player will see. A track can be present, hold every packet, and
+    // still be described in a way no decoder can use.
+    //
+    // Read from the muxer's own buffer rather than from a Blob, since the buffer is
+    // already in memory and a three-minute export is the better part of a hundred
+    // megabytes to read back a second time.
+    const probe = probeMp4Audio(target.buffer);
+    const verdict = judgeMp4Audio(
+      probe,
+      audioBuffer.duration,
+      MIN_AUDIO_COVERAGE,
+      ACCEPTED_SAMPLE_RATES,
+      EXPORT_CHANNELS,
+    );
+    if (!verdict.ok) {
+      throw new Error(`the finished MP4's audio track ${verdict.reason}`);
     }
-    return blob;
+    return new Blob([target.buffer], { type: 'video/mp4' });
   } finally {
     for (const encoder of [videoEncoder, audioEncoder]) {
       if (encoder.state !== 'closed') {
@@ -835,11 +1328,62 @@ export function describePipeline(pipeline: Pipeline): string {
 
 /** Returns true when this browser can produce an MP4 by some route. */
 export function canExportMp4(): boolean {
-  return (
-    webCodecsAvailable() ||
-    pickRecorderMime(MP4_RECORDER_MIMES) !== null ||
-    (pickRecorderMime(WEBM_RECORDER_MIMES) !== null && typeof WebAssembly !== 'undefined')
-  );
+  return availablePipelines().length > 0;
+}
+
+/**
+ * Which of the three routes this browser can actually run.
+ *
+ * Reported in the diagnostics, and what the dev-only selector's buttons are enabled
+ * from, so "I forced MediaRecorder and got WebCodecs" cannot happen silently.
+ */
+export function availablePipelines(): Pipeline[] {
+  const available: Pipeline[] = [];
+  if (webCodecsAvailable()) available.push('webcodecs');
+  if (pickRecorderMime(MP4_RECORDER_MIMES) !== null) available.push('mediarecorder');
+  if (pickRecorderMime(WEBM_RECORDER_MIMES) !== null && typeof WebAssembly !== 'undefined') {
+    available.push('ffmpeg');
+  }
+  return available;
+}
+
+/**
+ * Whether a proof is good enough to hand the file to the user.
+ *
+ * Only two methods pass. `decoded` is the real evidence: the finished file was read back
+ * to samples and those samples were above the silence floor. `stream` is the narrower
+ * case — the file's own audio boxes were measured and found sound, complete and
+ * correctly described, but this browser has no decoder to read its own MP4 back with,
+ * which on iPhone Safari is the ordinary case rather than a fault.
+ *
+ * Everything else rejects, and the two that used to be the bug reject loudest:
+ * `undecodable` (the file could not be read) and `too-large` (it was never looked at)
+ * were both previously reported as audible, which is precisely how a silent MP4 was
+ * offered as a finished video.
+ *
+ * WebCodecs is held to the stricter of the two rules. It is the only pipeline that
+ * assembles the container itself, so it is the only one that can write a file no player
+ * will decode — and a file Chrome or Safari cannot decode must fall through to
+ * MediaRecorder or ffmpeg rather than be approved on its box structure alone.
+ */
+function proofAccepted(proof: AudioProof, pipeline: Pipeline): boolean {
+  if (!proof.audible) return false;
+  if (pipeline === 'webcodecs') return proof.method === 'decoded';
+  return proof.method === 'decoded' || proof.method === 'stream';
+}
+
+/**
+ * The same question asked of a finished result, for the page to re-ask before the file
+ * leaves the tab.
+ *
+ * `encodeVideo` already refuses to return a result this is false for, so in practice it is
+ * the second lock on the same door. It exists because the door is the important one — a
+ * silent MP4 is the failure that looks exactly like a success once it is in a downloads
+ * folder or on a share sheet — and because a file should not get out on the strength of
+ * `audible` alone, which is the field that was wrong in the first place.
+ */
+export function audioProved(result: EncodeResult): boolean {
+  return proofAccepted(result.audio, result.pipeline);
 }
 
 export async function encodeVideo(options: EncodeOptions): Promise<EncodeResult> {
@@ -853,160 +1397,251 @@ export async function encodeVideo(options: EncodeOptions): Promise<EncodeResult>
       'There is no audio to put in the video. Record or upload a voice message first.',
     );
   }
+
+  const { width, height } = frameSize(options.spec);
+  const expectedSeconds = options.audioBuffer.duration;
+  const mixed = measureBuffer(options.audioBuffer);
+  const voice = options.voiceBuffer ?? null;
+  const voiceLevel = voice ? measureBuffer(voice) : EMPTY_LEVEL;
+
+  const diagnostics: ExportDiagnostics = {
+    browser: browserName(),
+    available: availablePipelines(),
+    requested: options.only ?? null,
+    pipeline: null,
+    source: {
+      sampleRate: voice?.sampleRate ?? options.audioBuffer.sampleRate,
+      channels: voice?.numberOfChannels ?? options.audioBuffer.numberOfChannels,
+      seconds: voice?.duration ?? expectedSeconds,
+      ...voiceLevel,
+    },
+    mixed: {
+      sampleRate: options.audioBuffer.sampleRate,
+      channels: options.audioBuffer.numberOfChannels,
+      seconds: expectedSeconds,
+      channelLevels: measureChannels(options.audioBuffer),
+      ...mixed,
+    },
+    encoder: null,
+    audioChunks: 0,
+    audioChunksMuxed: 0,
+    decoderDescriptionBytes: 0,
+    audioFlushed: false,
+    encodedAudioSeconds: 0,
+    expectedSeconds,
+    decodedSeconds: 0,
+    exported: EMPTY_LEVEL,
+    exportedTrack: null,
+    attempts: [],
+  };
+
   // The cheapest of the three audio checks, and the only one that behaves identically in
   // every browser: an encoder can lose sound but never invent it, so if what goes in is
   // silence, every route out is silence too. Said now rather than after a minute of a
   // phone's battery has gone into proving it.
-  if (measureBuffer(options.audioBuffer).peak < AUDIBLE_PEAK) {
-    throw new Error(
+  if (mixed.peak < AUDIBLE_PEAK) {
+    throw new ExportError(
       'The recording is silent, so the video would be too. Check the microphone and the voice volume, then record again.',
+      diagnostics,
     );
   }
 
   // Before any frame is painted, and before the preview's own font resolution is trusted:
   // a subtitle in a face that has not arrived yet is a subtitle that is not in the file.
   await ensureFontsReady(options.spec);
-  const { width, height } = frameSize(options.spec);
-  const expectedSeconds = options.audioBuffer.duration;
 
-  /** Listen to a finished file before accepting it. */
+  const wanted = (pipeline: Pipeline): boolean =>
+    options.only == null || options.only === pipeline;
+
+  /** Listen to a finished file before accepting it, and record what was heard. */
   const proveAudio = async (blob: Blob, mimeType: string): Promise<AudioProof> => {
     options.onProgress({
       stage: 'verify',
       ratio: 0.5,
       detail: 'Checking the exported file has audible sound',
     });
-    return verifyExportedAudio(blob, mimeType, expectedSeconds, options.audioContext);
+    const proof = await verifyExportedAudio(blob, mimeType, expectedSeconds, options.audioContext);
+    diagnostics.decodedSeconds = proof.seconds;
+    diagnostics.exported = { peak: proof.peak, rms: proof.rms };
+    diagnostics.exportedTrack = proof.track;
+    return proof;
   };
 
-  /**
-   * Reconcile the two ways a real-time capture can be checked.
-   *
-   * Decoding the finished file is the better evidence and wins whenever it is available.
-   * Where it is not — which on iPhone Safari is the common case, since it frequently
-   * cannot read back the fragmented MP4 it just wrote — the proof would otherwise fail
-   * open and a silent file would be handed over as a success. The peak measured off the
-   * recorded track answers the same question without needing a decoder.
-   */
-  const reconcile = (audio: AudioProof, trackPeak: number | null): AudioProof => {
-    if (audio.method === 'decoded' || trackPeak === null) return audio;
+  const attempts = diagnostics.attempts;
+  const record = (
+    pipeline: Pipeline,
+    at: number,
+    accepted: boolean,
+    bytes: number,
+    method: AudioProof['method'] | null,
+    reason: string | null,
+  ): void => {
+    attempts.push({ pipeline, accepted, elapsedMs: now() - at, bytes, method, reason });
+  };
+
+  const finish = (blob: Blob, mimeType: string, pipeline: Pipeline, audio: AudioProof) => {
+    diagnostics.pipeline = pipeline;
     return {
-      audible: trackPeak >= AUDIBLE_PEAK,
-      method: 'captured',
-      peak: trackPeak,
-      rms: 0,
-      seconds: expectedSeconds,
-    };
+      blob,
+      mimeType,
+      pipeline,
+      elapsedMs: now() - startedAt,
+      width,
+      height,
+      audio,
+      diagnostics,
+    } satisfies EncodeResult;
   };
 
   // 1. WebCodecs. Verifies its own audio track before returning, so a failure here is
   //    a reason to try the next pipeline rather than something to hand to the user.
-  options.onProgress({ stage: 'render', ratio: 0, detail: 'Preparing the encoder' });
-  let webCodecsError: unknown = null;
-  let recorderError: unknown = null;
-  try {
-    const blob = await encodeWithWebCodecs(options);
-    if (blob && blob.size > 0) {
-      const audio = await proveAudio(blob, 'video/mp4');
-      if (audio.audible) {
-        return {
-          blob,
-          mimeType: 'video/mp4',
-          pipeline: 'webcodecs',
-          elapsedMs: now() - startedAt,
-          width,
-          height,
-          audio,
-        };
+  if (wanted('webcodecs')) {
+    const at = now();
+    options.onProgress({ stage: 'render', ratio: 0, detail: 'Preparing the encoder' });
+    const account: AudioAccounting = {
+      chunks: 0,
+      muxed: 0,
+      descriptionBytes: 0,
+      flushed: false,
+      seconds: 0,
+      encoder: null,
+    };
+    try {
+      const blob = await encodeWithWebCodecs(options, account);
+      if (!blob || blob.size === 0) {
+        record('webcodecs', at, false, 0, null, 'this browser has no WebCodecs H.264 encoder');
+      } else {
+        const audio = await proveAudio(blob, 'video/mp4');
+        if (proofAccepted(audio, 'webcodecs')) {
+          record('webcodecs', at, true, blob.size, audio.method, null);
+          return finish(blob, 'video/mp4', 'webcodecs', audio);
+        }
+        // The file exists and its sound cannot be proved. Requirement, not preference:
+        // an MP4 this pipeline built that the browser cannot decode goes to the next
+        // pipeline instead of to the user.
+        record(
+          'webcodecs',
+          at,
+          false,
+          blob.size,
+          audio.method,
+          audio.reason ?? 'the finished MP4 could not be proved audible',
+        );
       }
-      throw new Error('the exported file decoded to silence');
+    } catch (error) {
+      if ((error as Error)?.name === 'AbortError') throw error;
+      record('webcodecs', at, false, 0, null, (error as Error)?.message ?? 'the encode failed');
+    } finally {
+      diagnostics.encoder = account.encoder;
+      diagnostics.audioChunks = account.chunks;
+      diagnostics.audioChunksMuxed = account.muxed;
+      diagnostics.decoderDescriptionBytes = account.descriptionBytes;
+      diagnostics.audioFlushed = account.flushed;
+      diagnostics.encodedAudioSeconds = account.seconds;
     }
-  } catch (error) {
-    if ((error as Error)?.name === 'AbortError') throw error;
-    webCodecsError = error;
+    throwIfAborted(options.signal);
   }
 
   // 2. MediaRecorder straight to MP4.
   const mp4Mime = pickRecorderMime(MP4_RECORDER_MIMES);
-  if (mp4Mime) {
+  if (wanted('mediarecorder') && mp4Mime) {
+    const at = now();
     options.onProgress({ stage: 'record', ratio: 0, detail: 'Starting real-time capture' });
     try {
       const { blob, trackPeak } = await recordRealtime(options, mp4Mime);
       const mimeType = blob.type || 'video/mp4';
-      // A recorder that quietly wrote video only leaves the WebM route below as the one
-      // remaining way to get a file with sound, so fall through instead of returning.
-      if (blob.size > 0) {
-        const audio = reconcile(await proveAudio(blob, mimeType), trackPeak);
-        if (audio.audible) {
-          return {
-            blob,
-            mimeType,
-            pipeline: 'mediarecorder',
-            elapsedMs: now() - startedAt,
-            width,
-            height,
-            audio,
-          };
+      if (blob.size === 0) {
+        record('mediarecorder', at, false, 0, null, 'the recorder produced an empty file');
+      } else {
+        const audio = await proveAudio(blob, mimeType);
+        // The live track reading is corroboration, never a substitute. A capture whose
+        // own track never rose above the silence floor is rejected even if the file
+        // measured as sound, because one of the two is then wrong about the recording.
+        if (trackPeak !== null && trackPeak < AUDIBLE_PEAK) {
+          record(
+            'mediarecorder',
+            at,
+            false,
+            blob.size,
+            audio.method,
+            `the recorded voice track peaked at ${trackPeak.toFixed(5)}, which is silence`,
+          );
+        } else if (proofAccepted(audio, 'mediarecorder')) {
+          record('mediarecorder', at, true, blob.size, audio.method, null);
+          return finish(blob, mimeType, 'mediarecorder', audio);
+        } else {
+          record(
+            'mediarecorder',
+            at,
+            false,
+            blob.size,
+            audio.method,
+            audio.reason ?? 'the capture could not be proved audible',
+          );
         }
-        recorderError = new Error('the real-time capture came out silent');
       }
     } catch (error) {
       if ((error as Error)?.name === 'AbortError') throw error;
-      recorderError = error;
+      record('mediarecorder', at, false, 0, null, (error as Error)?.message ?? 'the capture failed');
     }
     throwIfAborted(options.signal);
   }
 
   // 3. WebM capture, then convert.
   const webmMime = pickRecorderMime(WEBM_RECORDER_MIMES);
-  if (webmMime) {
+  if (wanted('ffmpeg') && webmMime) {
+    const at = now();
     options.onProgress({ stage: 'record', ratio: 0, detail: 'Starting real-time capture' });
-    const { blob: intermediate, trackPeak } = await recordRealtime(options, webmMime);
-    throwIfAborted(options.signal);
-    // Checked before the transcode rather than after: ffmpeg would happily spend
-    // minutes turning a soundless recording into a soundless MP4.
-    if (!(await hasAudioTrack(intermediate, intermediate.type || webmMime))) {
-      throw new Error(
-        'This browser recorded the video without its audio track. Try Chrome, Edge or Safari.',
+    try {
+      const { blob: intermediate, trackPeak } = await recordRealtime(options, webmMime);
+      throwIfAborted(options.signal);
+      // Both checked before the transcode rather than after: ffmpeg would happily spend
+      // minutes turning a soundless recording into a soundless MP4. The signature scan is
+      // sound here in a way it never was on the finished MP4 — this is the intermediate
+      // WebM, and the question is only whether the recorder wrote an audio track at all.
+      if (!(await hasAudioTrack(intermediate))) {
+        throw new Error('this browser recorded the video without its audio track');
+      }
+      if (trackPeak !== null && trackPeak < AUDIBLE_PEAK) {
+        throw new Error('this browser recorded the video without any sound in it');
+      }
+      options.onProgress({
+        stage: 'convert',
+        ratio: 0,
+        detail: 'Converting to H.264 — this browser has no MP4 encoder, so it takes a while',
+      });
+      const { transcodeToMp4 } = await import('./transcode');
+      const blob = await transcodeToMp4(intermediate, (ratio) =>
+        options.onProgress({ stage: 'convert', ratio, detail: 'Converting to H.264 / AAC' }),
       );
-    }
-    if (trackPeak !== null && trackPeak < AUDIBLE_PEAK) {
-      throw new Error(
-        'This browser recorded the video without any sound in it. Try Chrome, Edge or Safari.',
+      const audio = await proveAudio(blob, 'video/mp4');
+      if (proofAccepted(audio, 'ffmpeg')) {
+        record('ffmpeg', at, true, blob.size, audio.method, null);
+        return finish(blob, 'video/mp4', 'ffmpeg', audio);
+      }
+      record(
+        'ffmpeg',
+        at,
+        false,
+        blob.size,
+        audio.method,
+        audio.reason ?? 'the converted MP4 could not be proved audible',
       );
+    } catch (error) {
+      if ((error as Error)?.name === 'AbortError') throw error;
+      record('ffmpeg', at, false, 0, null, (error as Error)?.message ?? 'the conversion failed');
     }
-    options.onProgress({
-      stage: 'convert',
-      ratio: 0,
-      detail: 'Converting to H.264 — this browser has no MP4 encoder, so it takes a while',
-    });
-    const { transcodeToMp4 } = await import('./transcode');
-    const blob = await transcodeToMp4(intermediate, (ratio) =>
-      options.onProgress({ stage: 'convert', ratio, detail: 'Converting to H.264 / AAC' }),
-    );
-    const audio = reconcile(await proveAudio(blob, 'video/mp4'), trackPeak);
-    if (!audio.audible) {
-      throw new Error('The converted MP4 came out without audible audio. Please try again.');
-    }
-    return {
-      blob,
-      mimeType: 'video/mp4',
-      pipeline: 'ffmpeg',
-      elapsedMs: now() - startedAt,
-      width,
-      height,
-      audio,
-    };
   }
 
-  // Nothing worked. Lead with whatever the pipelines actually complained about, since
-  // "no audio track" is a very different problem from "no H.264 encoder".
-  const reason = [webCodecsError, recorderError].find(
-    (error): error is Error => error instanceof Error,
-  );
-  throw new Error(
-    reason
-      ? `Video export is not supported in this browser (${reason.message}). Try Chrome, Edge or Safari.`
-      : 'Video export is not supported in this browser. Try Chrome, Edge or Safari.',
+  // Nothing produced a file whose sound could be proved. That is a failed export, not a
+  // file to hand over with a warning attached: a silent MP4 is the one failure that looks
+  // exactly like a success once it has been downloaded.
+  const tried = attempts.map((attempt) => `${describePipeline(attempt.pipeline)}: ${attempt.reason}`);
+  const detail = tried.length > 0 ? ` (${tried.join('; ')})` : '';
+  throw new ExportError(
+    diagnostics.available.length === 0
+      ? 'Video export is not supported in this browser. Try Chrome, Edge or Safari.'
+      : `The video could not be exported with sound in it${detail}. Try Chrome, Edge or Safari.`,
+    diagnostics,
   );
 }

@@ -11,6 +11,7 @@
     "subtitles:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-subtitle-sync.mjs",
     "transcribe:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-transcribe.mjs",
     "layout:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-frame-layout.mjs",
+    "export:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-export-audio.mjs",
     "music:build": "node scripts/generate-music.js"
   },
   "dependencies": {

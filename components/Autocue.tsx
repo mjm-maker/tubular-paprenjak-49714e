@@ -16,6 +16,8 @@ interface SavedAutocue {
 
 interface AutocueProps {
   canRecord: boolean;
+  /** A finished voice clip is already loaded and will be replaced only after this recording stops. */
+  replacesCurrent: boolean;
   microphoneAvailable: boolean;
   recording: boolean;
   starting: boolean;
@@ -40,6 +42,7 @@ function wait(milliseconds: number): Promise<void> {
 
 export default function Autocue({
   canRecord,
+  replacesCurrent,
   microphoneAvailable,
   recording,
   starting,
@@ -153,7 +156,7 @@ export default function Autocue({
       return;
     }
     if (!canRecord) {
-      onError('Remove the current voice clip before recording a new one with Autocue.');
+      onError('Wait for the current audio to finish loading, then start Autocue again.');
       return;
     }
 
@@ -307,8 +310,13 @@ export default function Autocue({
                       {overLimit ? ` · GLASKO records up to ${formatDuration(MAX_DURATION_SECONDS)}` : ''}
                     </p>
                   )}
+                  {replacesCurrent && canRecord && (
+                    <p className="text-sm text-ash">
+                      Your new Autocue recording will replace the current voice clip after you press Stop.
+                    </p>
+                  )}
                   {!canRecord && microphoneAvailable && (
-                    <p className="text-sm text-clay">Remove the current voice clip before starting Autocue.</p>
+                    <p className="text-sm text-clay">Wait for the current audio to finish loading.</p>
                   )}
                   <button
                     type="button"

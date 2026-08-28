@@ -10,6 +10,7 @@ import {
   formatDuration,
   micRecordingSupported,
 } from '@/lib/audio';
+import Autocue from './Autocue';
 import { MicIcon, SpinnerIcon, StopIcon, TrashIcon, UploadIcon } from './Icons';
 
 export type AudioOrigin = 'mic' | 'file';
@@ -60,8 +61,8 @@ export default function SourcePanel({
     }
   }, [onAudio, onError]);
 
-  const start = useCallback(async () => {
-    if (starting || recording) return;
+  const start = useCallback(async (): Promise<boolean> => {
+    if (starting || recording) return false;
     setStarting(true);
     setElapsed(0);
     const recorder = new MicRecorder({
@@ -77,8 +78,10 @@ export default function SourcePanel({
       await recorder.start();
       recorderRef.current = recorder;
       setRecording(true);
+      return true;
     } catch (error) {
       onError(describeMicError(error));
+      return false;
     } finally {
       setStarting(false);
     }
@@ -109,6 +112,18 @@ export default function SourcePanel({
         </h2>
       </header>
 
+      <Autocue
+        canRecord={!source && !decoding && micSupported}
+        microphoneAvailable={micSupported}
+        recording={recording}
+        starting={starting}
+        elapsed={elapsed}
+        level={level}
+        onStart={start}
+        onStop={stop}
+        onError={onError}
+      />
+
       {source ? (
         <div className="flex items-center justify-between gap-4 border border-bone/12 bg-bone/[0.03] px-4 py-3.5">
           <div className="min-w-0">
@@ -133,7 +148,7 @@ export default function SourcePanel({
           <div className="flex items-center gap-4">
             <button
               type="button"
-              onClick={recording ? stop : start}
+              onClick={recording ? stop : () => void start()}
               disabled={busy || !micSupported}
               className="relative grid h-16 w-16 shrink-0 place-items-center rounded-full border transition-colors disabled:opacity-40"
               style={{

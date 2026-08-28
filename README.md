@@ -1,6 +1,6 @@
 # GLASKO
 
-GLASKO turns a voice message into a vertical video you can post. Record from the microphone or upload an audio file, choose a background and an animation style, optionally lay a music bed under your voice, and GLASKO renders a real 1080 × 1920 MP4 — H.264 video, AAC audio — that you can download or hand straight to your phone's share sheet.
+GLASKO turns a voice message into a vertical video you can post. Record from the microphone, read from the built-in autocue or upload an audio file, choose a background and an animation style, optionally lay a music bed under your voice, and GLASKO renders a real 1080 × 1920 MP4 — H.264 video, AAC audio — that you can download or hand straight to your phone's share sheet.
 
 Tagline: **"Turn your voice into social video."**
 
@@ -29,7 +29,7 @@ Then open `http://localhost:3000`. Microphone access needs a secure context — 
 
 ## How it works
 
-1. **Audio** — record from the mic (auto-stops at 3 minutes) or upload an existing file. It is decoded to raw samples at 48 kHz.
+1. **Audio** — record from the mic (auto-stops at 3 minutes), use Autocue to read a locally saved scrolling script while recording, or upload an existing file. The recording is decoded to raw samples at 48 kHz.
 2. **Background** — pick one of nine solid or gradient presets, or upload your own image. Uploaded images get a dark scrim so the text stays readable.
 3. **Animation** — choose an animated waveform or animated bars. The preview plays the real audio against the real renderer.
 4. **Background music** — pick from the built-in library (twelve tracks across Inspirational, Calm, Cinematic, Energetic, Business and Ambient) or upload your own MP3, WAV, M4A or AAC up to 20 MB. Preview any track before choosing it, set the voice and music volumes independently (voice 100%, music 15% by default), and remove or replace the selection at any time. A short track loops to cover the voice, a long one is trimmed to it, and both ends get a 1.2 s fade. Optional — the export works with no music at all.

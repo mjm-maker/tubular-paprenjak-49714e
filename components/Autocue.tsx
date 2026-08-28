@@ -4,9 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatDuration, MAX_DURATION_SECONDS } from '@/lib/audio';
 import { CaptionIcon, PauseIcon, PlayIcon, StopIcon } from './Icons';
 
-const STORAGE_KEY = 'glasko:autocue:v1';
-const DEFAULT_SPEED = 28;
-const DEFAULT_FONT_SIZE = 42;
+const STORAGE_KEY = 'glasko:autocue:v2';
+const LEGACY_STORAGE_KEY = 'glasko:autocue:v1';
+const MIN_SPEED = 20;
+const MAX_SPEED = 160;
+const DEFAULT_SPEED = 60;
+const MIN_FONT_SIZE = 32;
+const MAX_FONT_SIZE = 88;
+const DEFAULT_FONT_SIZE = 52;
 
 interface SavedAutocue {
   script: string;
@@ -16,6 +21,8 @@ interface SavedAutocue {
 
 interface AutocueProps {
   canRecord: boolean;
+  /** A finished voice clip is already loaded and will be replaced only after this recording stops. */
+  replacesCurrent: boolean;
   microphoneAvailable: boolean;
   recording: boolean;
   starting: boolean;
@@ -40,6 +47,7 @@ function wait(milliseconds: number): Promise<void> {
 
 export default function Autocue({
   canRecord,
+  replacesCurrent,
   microphoneAvailable,
   recording,
   starting,
@@ -67,12 +75,22 @@ export default function Autocue({
 
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
+      const current = window.localStorage.getItem(STORAGE_KEY);
+      const legacy = current ? null : window.localStorage.getItem(LEGACY_STORAGE_KEY);
+      const raw = current ?? legacy;
       if (raw) {
         const saved = JSON.parse(raw) as Partial<SavedAutocue>;
         if (typeof saved.script === 'string') setScript(saved.script);
-        if (typeof saved.speed === 'number') setSpeed(clamp(saved.speed, 12, 60));
-        if (typeof saved.fontSize === 'number') setFontSize(clamp(saved.fontSize, 28, 64));
+        if (typeof saved.speed === 'number') {
+          // v1 topped out at 60 px/s and felt almost stationary on a tall phone.
+          // Migrate that setting once instead of leaving existing users stuck on the
+          // old, slow value forever.
+          const migrated = legacy ? saved.speed * 2 : saved.speed;
+          setSpeed(clamp(Math.round(migrated), MIN_SPEED, MAX_SPEED));
+        }
+        if (typeof saved.fontSize === 'number') {
+          setFontSize(clamp(saved.fontSize, MIN_FONT_SIZE, MAX_FONT_SIZE));
+        }
       }
     } catch {
       // Autocue still works when private browsing blocks local storage.
@@ -125,6 +143,9 @@ export default function Autocue({
   }, []);
 
   const close = useCallback(async () => {
+    // Do not let the modal disappear in the tiny window while the browser is still
+    // opening the microphone. Once start resolves, Cancel can stop it normally.
+    if (starting) return;
     countdownRunRef.current += 1;
     setCountdown(null);
     setScrolling(false);
@@ -132,7 +153,7 @@ export default function Autocue({
     autocueRecordingRef.current = false;
     setReading(false);
     setOpen(false);
-  }, [onStop, recording]);
+  }, [onStop, recording, starting]);
 
   useEffect(() => {
     if (!open) return;
@@ -153,7 +174,7 @@ export default function Autocue({
       return;
     }
     if (!canRecord) {
-      onError('Remove the current voice clip before recording a new one with Autocue.');
+      onError('Wait for the current audio to finish loading, then start Autocue again.');
       return;
     }
 
@@ -163,6 +184,18 @@ export default function Autocue({
     setReading(true);
     setScrolling(false);
 
+    // Start this directly from the user's tap, before the first countdown wait.
+    // iPhone Safari can refuse or indefinitely suspend microphone/audio setup once
+    // that user gesture has been lost to a timer. The recorder may capture the short
+    // 3-2-1 lead-in, which is preferable to an Autocue that never starts at all.
+    const started = await onStart();
+    if (countdownRunRef.current !== run) return;
+    if (!started) {
+      setReading(false);
+      return;
+    }
+    autocueRecordingRef.current = true;
+
     for (let value = 3; value >= 1; value -= 1) {
       if (countdownRunRef.current !== run) return;
       setCountdown(value);
@@ -171,13 +204,7 @@ export default function Autocue({
     if (countdownRunRef.current !== run) return;
     setCountdown(null);
 
-    const started = await onStart();
     if (countdownRunRef.current !== run) return;
-    if (!started) {
-      setReading(false);
-      return;
-    }
-    autocueRecordingRef.current = true;
     setScrolling(true);
   }, [canRecord, microphoneAvailable, onError, onStart, resetScroll, script]);
 
@@ -263,9 +290,9 @@ export default function Autocue({
                     <input
                       id="autocue-speed"
                       type="range"
-                      min="12"
-                      max="60"
-                      step="1"
+                      min={MIN_SPEED}
+                      max={MAX_SPEED}
+                      step="5"
                       value={speed}
                       onChange={(event) => setSpeed(Number(event.target.value))}
                       className="mt-3"
@@ -286,8 +313,8 @@ export default function Autocue({
                     <input
                       id="autocue-font"
                       type="range"
-                      min="28"
-                      max="64"
+                      min={MIN_FONT_SIZE}
+                      max={MAX_FONT_SIZE}
                       step="2"
                       value={fontSize}
                       onChange={(event) => setFontSize(Number(event.target.value))}
@@ -307,8 +334,13 @@ export default function Autocue({
                       {overLimit ? ` · GLASKO records up to ${formatDuration(MAX_DURATION_SECONDS)}` : ''}
                     </p>
                   )}
+                  {replacesCurrent && canRecord && (
+                    <p className="text-sm text-ash">
+                      Your new Autocue recording will replace the current voice clip after you press Stop.
+                    </p>
+                  )}
                   {!canRecord && microphoneAvailable && (
-                    <p className="text-sm text-clay">Remove the current voice clip before starting Autocue.</p>
+                    <p className="text-sm text-clay">Wait for the current audio to finish loading.</p>
                   )}
                   <button
                     type="button"
@@ -339,7 +371,12 @@ export default function Autocue({
                     </p>
                   </div>
                 </div>
-                <button type="button" onClick={() => void close()} className="chip shrink-0">
+                <button
+                  type="button"
+                  onClick={() => void close()}
+                  disabled={starting}
+                  className="chip shrink-0"
+                >
                   {recording ? 'Stop & close' : 'Cancel'}
                 </button>
               </header>
@@ -402,29 +439,82 @@ export default function Autocue({
                     <span className="sm:hidden">Stop</span>
                   </button>
                 </div>
-                <div className="mx-auto mt-3 max-w-4xl">
-                  <div className="flex items-baseline justify-between gap-4">
-                    <label htmlFor="autocue-live-speed" className="label-mono normal-case tracking-normal">
-                      Speed
-                    </label>
-                    <span className="label-mono tabular-nums">{speed} px/s</span>
+                <div className="mx-auto mt-3 grid max-w-4xl gap-3 sm:grid-cols-2 sm:gap-5">
+                  <div>
+                    <div className="flex items-baseline justify-between gap-4">
+                      <label htmlFor="autocue-live-speed" className="label-mono normal-case tracking-normal">
+                        Speed
+                      </label>
+                      <span className="label-mono tabular-nums">{speed} px/s</span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSpeed((value) => clamp(value - 10, MIN_SPEED, MAX_SPEED))}
+                        className="chip h-10 !px-3 text-lg"
+                        aria-label="Slow down Autocue"
+                      >
+                        −
+                      </button>
+                      <input
+                        id="autocue-live-speed"
+                        type="range"
+                        min={MIN_SPEED}
+                        max={MAX_SPEED}
+                        step="5"
+                        value={speed}
+                        onChange={(event) => setSpeed(Number(event.target.value))}
+                        className="min-w-0 flex-1"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setSpeed((value) => clamp(value + 10, MIN_SPEED, MAX_SPEED))}
+                        className="chip h-10 !px-3 text-lg"
+                        aria-label="Speed up Autocue"
+                      >
+                        +
+                      </button>
+                    </div>
                   </div>
-                  <input
-                    id="autocue-live-speed"
-                    type="range"
-                    min="12"
-                    max="60"
-                    step="1"
-                    value={speed}
-                    onChange={(event) => setSpeed(Number(event.target.value))}
-                    className="mt-1"
-                  />
+
+                  <div>
+                    <div className="flex items-baseline justify-between gap-4">
+                      <label htmlFor="autocue-live-font" className="label-mono normal-case tracking-normal">
+                        Text size
+                      </label>
+                      <span className="label-mono tabular-nums">{fontSize} px</span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFontSize((value) => clamp(value - 4, MIN_FONT_SIZE, MAX_FONT_SIZE))}
+                        className="chip h-10 !px-3 text-lg"
+                        aria-label="Make Autocue text smaller"
+                      >
+                        −
+                      </button>
+                      <input
+                        id="autocue-live-font"
+                        type="range"
+                        min={MIN_FONT_SIZE}
+                        max={MAX_FONT_SIZE}
+                        step="2"
+                        value={fontSize}
+                        onChange={(event) => setFontSize(Number(event.target.value))}
+                        className="min-w-0 flex-1"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setFontSize((value) => clamp(value + 4, MIN_FONT_SIZE, MAX_FONT_SIZE))}
+                        className="chip h-10 !px-3 text-lg"
+                        aria-label="Make Autocue text larger"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </footer>
             </>
           )}
         </div>
-      )}
-    </>
-  );
-}

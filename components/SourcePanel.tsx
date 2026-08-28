@@ -113,7 +113,12 @@ export default function SourcePanel({
       </header>
 
       <Autocue
-        canRecord={!source && !decoding && micSupported}
+        // A loaded clip must not block Autocue. It stays in place while the new
+        // recording is being made and is replaced only when that recording is stopped
+        // and decoded successfully. Closing during the countdown therefore loses
+        // nothing, while pressing Stop does exactly what the user expects.
+        canRecord={!decoding && micSupported}
+        replacesCurrent={Boolean(source)}
         microphoneAvailable={micSupported}
         recording={recording}
         starting={starting}

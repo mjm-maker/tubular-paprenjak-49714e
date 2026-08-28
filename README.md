@@ -2,6 +2,8 @@
 
 GLASKO turns a voice message into a vertical video you can post. Record from the microphone, read from the built-in autocue or upload an audio file, choose a background and an animation style, optionally lay a music bed under your voice, and GLASKO renders a real 1080 × 1920 MP4 — H.264 video, AAC audio — that you can download or hand straight to your phone's share sheet.
 
+The Facebook LIVE camera test is a local rehearsal mode: it opens a vertical camera canvas with a private scrolling autocue and front/back camera switching. It does not send video to Facebook; a continuous streaming relay is still required before the control can become a real Go Live button.
+
 Tagline: **"Turn your voice into social video."**
 
 The output is sized and encoded for TikTok, Instagram Reels, Facebook Reels and YouTube Shorts.

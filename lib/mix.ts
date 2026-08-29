@@ -44,15 +44,6 @@ export const ACCEPTED_SAMPLE_RATES: readonly number[] = [48_000, 44_100];
 /** How far the music is pulled down while the voice is actually speaking. */
 export const DUCK_DEPTH = 0.62;
 
-/**
- * Hard ceiling on the music level, as a fraction of the voice level.
- *
- * The slider can ask for more than this; it does not get it. A music bed that can
- * be turned up until it covers the speaker is a way to ruin a recording in one
- * drag, and the whole point of the feature is the voice.
- */
-export const MUSIC_HEADROOM = 0.6;
-
 /** Envelope resolution for the duck, in samples per second. */
 const DUCK_RATE = 40;
 /** Voice level, as a fraction of the clip's own peak, that counts as full speech. */
@@ -86,14 +77,12 @@ export function musicGainAt(
   return Math.min(rising, falling);
 }
 
-/** The music level actually used, given both sliders. Never above the voice. */
-export function effectiveMusicLevel(musicVolume: number, voiceVolume: number): number {
-  return Math.min(clamp01(musicVolume), clamp01(voiceVolume) * MUSIC_HEADROOM);
-}
-
-/** True when the ceiling above is what is setting the level, not the slider. */
-export function musicLevelCapped(musicVolume: number, voiceVolume: number): boolean {
-  return clamp01(musicVolume) > clamp01(voiceVolume) * MUSIC_HEADROOM + 0.0005;
+/**
+ * The slider maps directly to the base music level. Speech protection comes from
+ * the ducking envelope below, so every step from 0% to 100% remains audible.
+ */
+export function effectiveMusicLevel(musicVolume: number, _voiceVolume: number): number {
+  return clamp01(musicVolume);
 }
 
 // --- voice-priority ducking ------------------------------------------------

@@ -99,6 +99,32 @@
   input[type='range']:active::-webkit-slider-thumb {
     transform: scale(1.12);
   }
+
+  /* The two audio controls are deliberately larger than the other fine-tuning
+     sliders: they must be easy to drag with one thumb while Preview is playing. */
+  input.volume-range {
+    height: 2.5rem;
+    touch-action: pan-y;
+  }
+
+  input.volume-range::-webkit-slider-runnable-track {
+    height: 4px;
+  }
+
+  input.volume-range::-webkit-slider-thumb {
+    width: 22px;
+    height: 22px;
+    margin-top: -9px;
+  }
+
+  input.volume-range::-moz-range-track {
+    height: 4px;
+  }
+
+  input.volume-range::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+  }
 }
 
 @layer components {

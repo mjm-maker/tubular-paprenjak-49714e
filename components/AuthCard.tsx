@@ -45,11 +45,8 @@ export default function AuthCard({ title, lede, children, footer }: AuthCardProp
       <div className="mt-8 border-t border-bone/10 pt-5">
         {footer}
         <p className="label-mono mt-4 normal-case tracking-normal leading-relaxed">
-          An account is optional.{' '}
-          <Link href="/" className="text-bone underline decoration-bone/30 hover:decoration-bone">
-            Make a video without one
-          </Link>
-          .
+          A GLASKO account is required to open the editor. Your recordings and videos still stay
+          on your device.
         </p>
       </div>
     </main>
@@ -59,7 +56,7 @@ export default function AuthCard({ title, lede, children, footer }: AuthCardProp
 interface AuthFieldProps {
   id: string;
   label: string;
-  type?: 'text' | 'email' | 'password';
+  type?: 'text' | 'email' | 'password' | 'tel';
   value: string;
   onChange: (value: string) => void;
   error?: string;

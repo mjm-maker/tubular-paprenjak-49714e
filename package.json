@@ -9,11 +9,11 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "auth:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-auth.mjs",
+    "music:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-music.mjs",
     "subtitles:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-subtitle-sync.mjs",
     "transcribe:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-transcribe.mjs",
     "layout:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-frame-layout.mjs",
-    "export:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-export-audio.mjs",
-    "music:build": "node scripts/generate-music.js"
+    "export:check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --import ./scripts/ts-resolve.mjs scripts/check-export-audio.mjs"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.15",

@@ -246,6 +246,10 @@ export function resolveSubtitleStyle(settings: SubtitleSettings): ResolvedSubtit
 
 // --- timing ---------------------------------------------------------------
 
+/** Short model-made holes should not make a subtitle visibly blink off mid-sentence. */
+export const MAX_SHORT_CUE_GAP_SECONDS = 0.45;
+const CUE_HANDOFF_GAP_SECONDS = 0.01;
+
 /** The cue covering `elapsed`, or null in a gap. Cues are assumed sorted. */
 export function cueAt(cues: SubtitleCue[], elapsed: number): SubtitleCue | null {
   for (let i = 0; i < cues.length; i++) {
@@ -281,6 +285,21 @@ export function normaliseCues(cues: SubtitleCue[], duration: number): SubtitleCu
       const boundary = Math.max(sorted[i - 1].start + 0.2, sorted[i].start);
       sorted[i - 1] = { ...sorted[i - 1], end: boundary };
       sorted[i] = { ...sorted[i], start: boundary };
+    }
+  }
+
+  // Speech models commonly leave a 0.1–0.4 s hole between neighbouring pieces of
+  // one sentence. Close only those short holes, leaving real pauses blank. Because
+  // this changes the cue data itself, Preview, MP4, SRT and VTT all stay identical.
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const cue = sorted[i];
+    const next = sorted[i + 1];
+    const gap = next.start - cue.end;
+    if (gap > CUE_HANDOFF_GAP_SECONDS && gap <= MAX_SHORT_CUE_GAP_SECONDS) {
+      sorted[i] = {
+        ...cue,
+        end: Math.min(duration, next.start - CUE_HANDOFF_GAP_SECONDS),
+      };
     }
   }
   return sorted.filter((cue) => cue.end > cue.start + 0.05);

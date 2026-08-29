@@ -52,6 +52,7 @@ import {
   type SelectedMusic,
 } from '@/lib/music';
 import { DEFAULT_PICTURE, type PictureSettings } from '@/lib/picture';
+import { createPreviewWav } from '@/lib/preview-audio';
 import type { RenderSpec } from '@/lib/render';
 import {
   SHARE_TEXT,
@@ -383,11 +384,15 @@ export default function Home() {
         }
 
         const analysis = await analyseAudio(buffer);
+        // Preview a plain WAV made from the decoded samples. In particular, iPhone
+        // Safari may decode an Autocue recording while refusing to play its original
+        // MediaRecorder container through an <audio> element.
+        const previewAudio = createPreviewWav(buffer);
         setSource({
           origin,
           label,
           bytes: blob.size,
-          url: URL.createObjectURL(blob),
+          url: URL.createObjectURL(previewAudio),
           buffer,
           analysis,
         });
@@ -607,6 +612,10 @@ export default function Home() {
       return;
     }
     stopAudition();
+    // A previous route or browser state must never leave the voice player muted.
+    audio.muted = false;
+    audio.defaultMuted = false;
+    audio.volume = Math.min(1, Math.max(0, voiceVolume));
     // Restart from the top once it has run to the end.
     if (audio.ended || audio.currentTime >= source.analysis.duration - 0.05) {
       audio.currentTime = 0;
@@ -624,8 +633,8 @@ export default function Home() {
     audio
       .play()
       .then(() => setPlaying(true))
-      .catch(() => setNotice('Playback was blocked. Tap the play button again.'));
-  }, [music, playing, source, stopAudition]);
+      .catch(() => setNotice('Preview sound could not start. Tap the play button again.'));
+  }, [music, playing, source, stopAudition, voiceVolume]);
 
   /* ---------------------------------------------------------------- subtitles */
 
@@ -1293,6 +1302,7 @@ export default function Home() {
           preload="auto"
           onEnded={() => setPlaying(false)}
           onPause={() => setPlaying(false)}
+          onError={() => setNotice('Preview sound could not be loaded. Record the voice again.')}
           className="hidden"
         />
       )}

@@ -48,7 +48,7 @@ import {
 import {
   DEFAULT_MUSIC_VOLUME,
   DEFAULT_VOICE_VOLUME,
-  type MusicTrack,
+  normaliseVolume,
   type SelectedMusic,
 } from '@/lib/music';
 import { DEFAULT_PICTURE, type PictureSettings } from '@/lib/picture';
@@ -198,6 +198,26 @@ export default function Home() {
   const subtitleAbortRef = useRef<AbortController | null>(null);
   const demoAnalysis = useMemo(() => createDemoAnalysis(), []);
 
+  // Apply volume directly as well as through React state. This keeps the controls
+  // responsive while audio is already playing, especially during a phone drag.
+  const changeVoiceVolume = useCallback((value: number) => {
+    const level = normaliseVolume(value);
+    setVoiceVolume(level);
+    const element = audioRef.current;
+    if (element) {
+      element.muted = false;
+      element.defaultMuted = false;
+      element.volume = level;
+    }
+  }, []);
+
+  const changeMusicVolume = useCallback((value: number) => {
+    const level = normaliseVolume(value);
+    setMusicVolume(level);
+    if (musicRef.current) musicRef.current.volume = level;
+    if (auditionRef.current) auditionRef.current.volume = level;
+  }, []);
+
   // Resolve the real font family names once the webfonts have loaded, so canvas
   // text uses the same faces as the interface.
   useEffect(() => {
@@ -273,10 +293,10 @@ export default function Home() {
     };
   }, [pictureImage]);
 
-  // Only uploaded music owns an object URL; built-in tracks are static paths.
+  // The user's song is a local object URL; release it when replaced or on unmount.
   useEffect(() => {
     return () => {
-      if (music?.origin === 'upload') URL.revokeObjectURL(music.url);
+      if (music) URL.revokeObjectURL(music.url);
     };
   }, [music]);
 
@@ -473,35 +493,8 @@ export default function Home() {
     setPictureImage(null);
   }, []);
 
-  const selectTrack = useCallback(async (track: MusicTrack) => {
-    setNotice(null);
-    setMusicLoadingId(track.id);
-    try {
-      const response = await fetch(track.src);
-      if (!response.ok) throw new Error(`${track.title} could not be loaded.`);
-      const blob = await response.blob();
-      // Decoded up front so the export never has to wait on the network, and so a
-      // broken file is reported here rather than three steps later.
-      const buffer = await decodeAudio(blob);
-      setMusic({
-        id: track.id,
-        title: track.title,
-        category: track.category,
-        artist: track.artist,
-        license: track.license,
-        duration: buffer.duration,
-        url: track.src,
-        origin: 'library',
-        buffer,
-      });
-    } catch (error) {
-      setNotice((error as Error)?.message ?? 'That track could not be loaded.');
-    } finally {
-      setMusicLoadingId(null);
-    }
-  }, []);
-
   const uploadMusic = useCallback(async (file: File) => {
+    stopAudition();
     setNotice(null);
     setMusicLoadingId('upload');
     let url: string | null = null;
@@ -515,7 +508,7 @@ export default function Home() {
       setMusic({
         id: 'upload',
         title: file.name.replace(/\.[^.]+$/, ''),
-        category: 'Your upload',
+        category: 'Your song',
         artist: 'Uploaded by you',
         license: 'You confirmed you have the right to use this track',
         duration: buffer.duration,
@@ -529,7 +522,7 @@ export default function Home() {
     } finally {
       setMusicLoadingId(null);
     }
-  }, []);
+  }, [stopAudition]);
 
   const removeMusic = useCallback(() => {
     musicRef.current?.pause();
@@ -564,7 +557,6 @@ export default function Home() {
       element.pause();
       return;
     }
-    element.volume = 0.85;
     element.currentTime = 0;
     element.play().catch(() => {
       setAuditionId(null);
@@ -572,9 +564,22 @@ export default function Home() {
     });
   }, [auditionId, auditionSrc]);
 
+  // Volume changes must not restart the audition from the beginning.
+  useEffect(() => {
+    const element = auditionRef.current;
+    if (!element) return;
+    element.muted = false;
+    element.defaultMuted = false;
+    element.volume = normaliseVolume(musicVolume);
+  }, [musicVolume]);
+
   useEffect(() => {
     const element = audioRef.current;
-    if (element) element.volume = Math.min(1, Math.max(0, voiceVolume));
+    if (element) {
+      element.muted = false;
+      element.defaultMuted = false;
+      element.volume = normaliseVolume(voiceVolume);
+    }
   }, [source, voiceVolume]);
 
   // Music under the preview. The volume is recomputed from the voice's playback
@@ -592,7 +597,9 @@ export default function Home() {
     const apply = () => {
       const elapsed = audioRef.current?.currentTime ?? 0;
       const gain = level * musicGainAt(elapsed, duration) * duckGainAt(duck, elapsed);
-      element.volume = Math.min(1, Math.max(0, gain));
+      element.muted = false;
+      element.defaultMuted = false;
+      element.volume = normaliseVolume(gain);
     };
     apply();
     element.play().catch(() => undefined);
@@ -1201,12 +1208,11 @@ export default function Home() {
             voiceDuration={source?.analysis.duration ?? 0}
             voiceVolume={voiceVolume}
             musicVolume={musicVolume}
-            onSelect={selectTrack}
             onUpload={uploadMusic}
             onRemove={removeMusic}
             onAudition={toggleAudition}
-            onVoiceVolume={setVoiceVolume}
-            onMusicVolume={setMusicVolume}
+            onVoiceVolume={changeVoiceVolume}
+            onMusicVolume={changeMusicVolume}
             onError={setNotice}
           />
           <SubtitlePanel

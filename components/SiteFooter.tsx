@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { recordVisit, type VisitorCounts } from '@/lib/visitors';
+import MemberCount from './MemberCount';
 import { SparkIcon } from './Icons';
 
 /**
@@ -30,15 +31,15 @@ export default function SiteFooter() {
     <footer className="mt-16 border-t border-bone/10 pt-6">
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
         <p className="text-sm text-bone">Product of Bulgaria 🇧🇬</p>
-        {counts && (
-          <p className="label-mono tabular-nums normal-case tracking-normal">
-            Visitors: {counts.totalVisits.toLocaleString()}
-            <span className="text-ash/70">
-              {' '}
-              · {counts.uniqueVisitors.toLocaleString()} unique
-            </span>
-          </p>
-        )}
+        <div className="text-right">
+          <MemberCount />
+          {counts && (
+            <p className="label-mono mt-1 tabular-nums normal-case tracking-normal text-ash/70">
+              Visitors: {counts.totalVisits.toLocaleString()} ·{' '}
+              {counts.uniqueVisitors.toLocaleString()} unique
+            </p>
+          )}
+        </div>
       </div>
 
       <div className="mt-5 border-t border-bone/10 pt-5">
@@ -67,8 +68,7 @@ export default function SiteFooter() {
       </div>
 
       <p className="label-mono mt-5">
-        Glasko · browser-only voice video · an account is optional, your video never leaves this
-        device
+        Glasko · account access · browser-only voice video · your video never leaves this device
       </p>
     </footer>
   );

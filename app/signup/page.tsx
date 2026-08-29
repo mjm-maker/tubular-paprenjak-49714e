@@ -11,10 +11,8 @@ import { MIN_PASSWORD, describeAuthError, validateSignup, type FieldErrors } fro
 /**
  * Create an account.
  *
- * The name is passed as `full_name` in the signup metadata, which is where Identity's
- * `user.name` comes from — the account page reads it back from there rather than keeping
- * a copy. The password goes into `signup()` and nowhere else; there is no local record
- * of it, hashed or plain.
+ * The name and optional phone are passed as Identity profile metadata. The password
+ * goes into `signup()` and nowhere else; there is no local record of it, hashed or plain.
  *
  * Whether the new account is logged in immediately depends on the project's autoconfirm
  * setting, so this asks the returned user instead of assuming: a confirmed account goes
@@ -26,6 +24,7 @@ export default function SignupPage() {
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -37,11 +36,11 @@ export default function SignupPage() {
     return (
       <AuthCard title="You already have an account" lede="You are logged in on this device.">
         <div className="space-y-3">
-          <Link href="/account" className="btn-primary">
-            Go to your account
+          <Link href="/" className="btn-primary">
+            Open GLASKO
           </Link>
-          <Link href="/" className="btn-ghost">
-            Back to the editor
+          <Link href="/account" className="btn-ghost">
+            Your account
           </Link>
         </div>
       </AuthCard>
@@ -60,8 +59,7 @@ export default function SignupPage() {
         }
       >
         <FormNotice tone="success">
-          The link opens GLASKO and finishes the sign-up. Nothing you have already made in the
-          editor is affected.
+          The link confirms your unique email address and then opens GLASKO.
         </FormNotice>
       </AuthCard>
     );
@@ -71,17 +69,20 @@ export default function SignupPage() {
     event.preventDefault();
     setFailure(null);
 
-    const found = validateSignup({ name, email, password, confirm });
+    const found = validateSignup({ name, email, phone, password, confirm });
     setErrors(found);
     if (Object.keys(found).length > 0) return;
 
     setBusy(true);
     try {
-      const user = await signup(email.trim(), password, { full_name: name.trim() });
+      const user = await signup(email.trim(), password, {
+        full_name: name.trim(),
+        ...(phone.trim() ? { phone: phone.trim() } : {}),
+      });
       if (user.confirmedAt) {
         // Autoconfirm is on: the account exists and the session is live.
         await refresh();
-        router.replace('/account');
+        router.replace('/');
         return;
       }
       setSent(true);
@@ -95,7 +96,7 @@ export default function SignupPage() {
   return (
     <AuthCard
       title="Create your GLASKO account"
-      lede="So you can come back to your settings on another device. The editor works without one."
+      lede="A small account is required to open the editor. One account per email address."
       footer={
         <p className="text-sm text-ash">
           Already have an account?{' '}
@@ -125,6 +126,18 @@ export default function SignupPage() {
           onChange={setEmail}
           error={errors.email}
           autoComplete="email"
+          hint="This email uniquely identifies your GLASKO account"
+          disabled={busy}
+        />
+        <AuthField
+          id="phone"
+          label="Phone — optional"
+          type="tel"
+          value={phone}
+          onChange={setPhone}
+          error={errors.phone}
+          autoComplete="tel"
+          hint="Useful later for account support; you may leave it empty"
           disabled={busy}
         />
         <AuthField
@@ -156,7 +169,7 @@ export default function SignupPage() {
         <p className="label-mono normal-case tracking-normal leading-relaxed">
           Your password is sent to Netlify Identity to be hashed there. GLASKO never stores it, and
           your recordings, images and exported videos stay on your device — an account holds
-          nothing but your name and email.
+          only your name, email and an optional phone number.
         </p>
       </form>
     </AuthCard>

@@ -29,11 +29,11 @@ export default function LoginPage() {
     return (
       <AuthCard title="You are logged in" lede="This device already has a session.">
         <div className="space-y-3">
-          <Link href="/account" className="btn-primary">
-            Go to your account
+          <Link href="/" className="btn-primary">
+            Open GLASKO
           </Link>
-          <Link href="/" className="btn-ghost">
-            Back to the editor
+          <Link href="/account" className="btn-ghost">
+            Your account
           </Link>
         </div>
       </AuthCard>
@@ -55,7 +55,7 @@ export default function LoginPage() {
     try {
       await login(email.trim(), password);
       await refresh();
-      router.replace('/account');
+      router.replace('/');
     } catch (error) {
       setFailure(describeAuthError(error, 'login'));
     } finally {

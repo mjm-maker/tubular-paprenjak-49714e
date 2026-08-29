@@ -24,8 +24,8 @@ import { describeAuthError } from '@/lib/auth';
  * `status` starts as `'loading'` and the header renders nothing for the account until it
  * resolves, so a signed-in visitor never sees a "Log in" button flash first.
  *
- * None of this gates the editor. `app/page.tsx` does not read this context at all — an
- * account is somewhere to come back to, not a condition of making a video.
+ * `AccountGate` reads this state and mounts the editor only for a signed-in user. The
+ * editor itself remains independent of Identity once it is mounted.
  */
 
 export type AuthStatus = 'loading' | 'signed-in' | 'signed-out';
@@ -95,7 +95,7 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
             case 'confirmation':
               settle(result.user);
               setNotice('Email confirmed — you are logged in.');
-              router.replace('/account');
+              router.replace('/');
               return;
             case 'email_change':
               settle(result.user);
@@ -104,7 +104,7 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
               return;
             default:
               settle(result.user);
-              router.replace('/account');
+              router.replace('/');
               return;
           }
         }

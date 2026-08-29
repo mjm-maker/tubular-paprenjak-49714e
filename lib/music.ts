@@ -1,86 +1,19 @@
-/**
- * The background-music library: the built-in catalogue plus the rules for
- * user-supplied tracks.
- *
- * The catalogue itself lives in `public/music/library.json` so the audio files and
- * the metadata that describes them sit together in one folder. That file is
- * written by `scripts/generate-music.js` (`npm run music:build`), which
- * synthesises every built-in track from oscillators — no samples, no third-party
- * recordings — so the whole library ships as CC0 public domain. Adding a properly
- * licensed third-party track means dropping the file into `public/music/` and
- * adding an entry to that JSON by hand.
- */
+/** User-upload rules and shared volume values for background music. */
 
-import libraryData from '@/public/music/library.json';
-
-export const MUSIC_CATEGORIES = [
-  'Inspirational',
-  'Calm',
-  'Cinematic',
-  'Energetic',
-  'Business',
-  'Ambient',
-] as const;
-
-export type MusicCategory = (typeof MUSIC_CATEGORIES)[number];
-
-export interface MusicTrack {
-  id: string;
-  title: string;
-  category: MusicCategory;
-  /** Path under `public/`, e.g. `/music/steady-hand.mp3`. */
-  src: string;
-  duration: number;
-  artist: string;
-  license: string;
-  /** One-line description shown on the card. */
-  mood?: string;
-}
-
-/** What the app holds once a track — built-in or uploaded — has been decoded. */
+/** What the app holds once the user's song has been decoded. */
 export interface SelectedMusic {
   id: string;
   title: string;
-  /** Built-in category, or `'Your upload'` for a user file. */
+  /** Display label for the user file. */
   category: string;
   artist: string;
   license: string;
   duration: number;
-  /** Playable URL: a static path for built-ins, an object URL for uploads. */
+  /** Playable object URL for the local upload. */
   url: string;
-  origin: 'library' | 'upload';
+  origin: 'upload';
   buffer: AudioBuffer;
 }
-
-function isCategory(value: unknown): value is MusicCategory {
-  return typeof value === 'string' && (MUSIC_CATEGORIES as readonly string[]).includes(value);
-}
-
-/**
- * Read the JSON defensively. A hand-edited entry with a category that is not in
- * the list above should drop out of the picker rather than break the page.
- */
-export const MUSIC_LIBRARY: MusicTrack[] = (libraryData as unknown[]).flatMap((entry) => {
-  const track = entry as Partial<MusicTrack>;
-  if (!track.id || !track.title || !track.src || !isCategory(track.category)) return [];
-  return [
-    {
-      id: track.id,
-      title: track.title,
-      category: track.category,
-      src: track.src,
-      duration: typeof track.duration === 'number' ? track.duration : 0,
-      artist: track.artist ?? 'Unknown',
-      license: track.license ?? 'Unspecified',
-      mood: track.mood,
-    },
-  ];
-});
-
-/** Categories that actually have tracks, in the canonical order. */
-export const POPULATED_CATEGORIES: MusicCategory[] = MUSIC_CATEGORIES.filter((category) =>
-  MUSIC_LIBRARY.some((track) => track.category === category),
-);
 
 export const MAX_MUSIC_BYTES = 20 * 1024 * 1024;
 
@@ -128,6 +61,12 @@ export function describeMusicFileProblem(file: File): string | null {
 
 export const DEFAULT_VOICE_VOLUME = 1;
 export const DEFAULT_MUSIC_VOLUME = 0.15;
+
+/** One volume rule for slider input, live players and exported audio. */
+export function normaliseVolume(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
 
 export interface MusicCoverage {
   mode: 'loop' | 'trim' | 'exact';

@@ -38,6 +38,7 @@ import {
   SILENT_FRAME_BYTES,
   AAC_LC_OBJECT_TYPE,
 } from '../lib/mp4probe.ts';
+import { createPreviewWav } from '../lib/preview-audio.ts';
 
 /** Matches `MIN_AUDIO_COVERAGE` in lib/encode.ts. Asserted, not imported. */
 const MIN_AUDIO_COVERAGE = 0.9;
@@ -69,6 +70,29 @@ function ok(condition, label, detail = '') {
 
 function section(title) {
   console.log(`\n${title}`);
+}
+
+section('Preview uses a playable WAV made from the decoded voice');
+{
+  const samples = new Float32Array([-1, -0.5, 0, 0.5, 1]);
+  const preview = createPreviewWav({
+    numberOfChannels: 1,
+    length: samples.length,
+    sampleRate: 48_000,
+    getChannelData: () => samples,
+  });
+  const bytes = new Uint8Array(await preview.arrayBuffer());
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const ascii = (from, to) => String.fromCharCode(...bytes.slice(from, to));
+
+  ok(preview.type === 'audio/wav', 'the browser is handed audio/wav');
+  ok(ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WAVE', 'the RIFF/WAVE header is valid');
+  ok(view.getUint16(20, true) === 1, 'the file is uncompressed PCM');
+  ok(view.getUint16(22, true) === 1, 'the phone-friendly preview is mono');
+  ok(view.getUint32(24, true) === 48_000, 'the decoded sample rate is preserved');
+  ok(view.getUint32(40, true) === samples.length * 2, 'every decoded sample is present');
+  ok(view.getInt16(44, true) < -32_000, 'audible negative samples survive');
+  ok(view.getInt16(52, true) > 32_000, 'audible positive samples survive');
 }
 
 // --- building files the muxer really wrote ---------------------------------

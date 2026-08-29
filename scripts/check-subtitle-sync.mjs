@@ -357,6 +357,27 @@ function casePreviewMatchesExport() {
   ok(covered === phrases.length, 'every phrase has its cue on screen while it is spoken');
 }
 
+function caseShortGapsDoNotBlink() {
+  console.log('\nShort subtitle gaps stay visible; real pauses stay empty');
+  const duration = 8;
+  const cues = normaliseCues(
+    [
+      { id: 'a', start: 0.5, end: 1.5, bg: 'Първи ред', en: '' },
+      { id: 'b', start: 1.82, end: 3.0, bg: 'Втори ред', en: '' },
+      { id: 'c', start: 4.0, end: 5.2, bg: 'Трети ред', en: '' },
+    ],
+    duration,
+  );
+
+  ok(cueAt(cues, 1.7)?.id === 'a', 'a short model gap no longer flashes blank');
+  ok(cueAt(cues, 3.5) === null, 'a real pause is still left blank');
+  ok(
+    toSrt(cues, 'bg').includes('00:00:01,810'),
+    'the sidecar carries the same closed handoff as Preview and MP4',
+  );
+  assertWellFormed(cues, duration, 'short-gap handoff');
+}
+
 /**
  * The rest of this file hands the aligner an envelope it built. This case goes through
  * the app's own analysis instead: real samples in, `analyseAudio` over them, and the
@@ -604,6 +625,7 @@ caseBeyondTheLimit();
 caseNoUsableAudio();
 caseNoisyRoom();
 casePreviewMatchesExport();
+caseShortGapsDoNotBlink();
 await caseRealSamples();
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

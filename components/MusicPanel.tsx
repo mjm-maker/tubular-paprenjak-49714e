@@ -1,16 +1,13 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useRef } from 'react';
 import { formatDuration } from '@/lib/audio';
 import {
   MUSIC_FORMAT_LABEL,
-  MUSIC_LIBRARY,
   MUSIC_UPLOAD_ACCEPT,
-  POPULATED_CATEGORIES,
   describeMusicFileProblem,
   musicCoverage,
-  type MusicCategory,
-  type MusicTrack,
+  normaliseVolume,
   type SelectedMusic,
 } from '@/lib/music';
 import { MUSIC_FADE_SECONDS } from '@/lib/mix';
@@ -27,15 +24,11 @@ import {
 
 interface MusicPanelProps {
   selected: SelectedMusic | null;
-  /** Track currently being fetched and decoded, if any. */
   loadingId: string | null;
-  /** Id of the track being auditioned, or null. Owned by the page. */
   auditionId: string | null;
-  /** Length of the voice recording; 0 when none is loaded yet. */
   voiceDuration: number;
   voiceVolume: number;
   musicVolume: number;
-  onSelect: (track: MusicTrack) => void;
   onUpload: (file: File) => void;
   onRemove: () => void;
   onAudition: (id: string, src: string) => void;
@@ -44,40 +37,75 @@ interface MusicPanelProps {
   onError: (message: string) => void;
 }
 
-type Filter = MusicCategory | 'All';
-
+/** A touch-friendly slider with buttons as a reliable fallback on phones. */
 function VolumeSlider({
   id,
   label,
   hint,
   value,
+  disabled = false,
   onChange,
 }: {
   id: string;
   label: string;
   hint: string;
   value: number;
+  disabled?: boolean;
   onChange: (value: number) => void;
 }) {
+  const level = normaliseVolume(value);
+  const percent = Math.round(level * 100);
+  const update = (next: number) => onChange(normaliseVolume(next));
+  const readInput = (event: React.FormEvent<HTMLInputElement>) => {
+    update(Number(event.currentTarget.value) / 100);
+  };
+
   return (
-    <div>
+    <div className={disabled ? 'opacity-55' : undefined}>
       <div className="flex items-baseline justify-between gap-3">
         <label htmlFor={id} className="text-sm text-bone">
           {label}
         </label>
-        <span className="label-mono tabular-nums">{Math.round(value * 100)}%</span>
+        <output htmlFor={id} className="label-mono tabular-nums">
+          {percent}%
+        </output>
       </div>
-      <input
-        id={id}
-        type="range"
-        min={0}
-        max={100}
-        step={1}
-        value={Math.round(value * 100)}
-        onChange={(event) => onChange(Number(event.target.value) / 100)}
-        className="mt-2.5 w-full"
-        aria-describedby={`${id}-hint`}
-      />
+
+      <div className="mt-2 flex items-center gap-2.5">
+        <button
+          type="button"
+          onClick={() => update(level - 0.05)}
+          disabled={disabled || level <= 0}
+          className="chip grid h-10 w-10 shrink-0 place-items-center !p-0 text-lg disabled:opacity-30"
+          aria-label={`Lower ${label.toLowerCase()}`}
+        >
+          −
+        </button>
+        <input
+          id={id}
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={percent}
+          disabled={disabled}
+          onInput={readInput}
+          onChange={readInput}
+          className="volume-range min-w-0 flex-1 disabled:cursor-not-allowed"
+          aria-describedby={`${id}-hint`}
+          aria-valuetext={`${percent} percent`}
+        />
+        <button
+          type="button"
+          onClick={() => update(level + 0.05)}
+          disabled={disabled || level >= 1}
+          className="chip grid h-10 w-10 shrink-0 place-items-center !p-0 text-lg disabled:opacity-30"
+          aria-label={`Raise ${label.toLowerCase()}`}
+        >
+          +
+        </button>
+      </div>
+
       <p id={`${id}-hint`} className="label-mono mt-1.5 normal-case tracking-normal">
         {hint}
       </p>
@@ -92,7 +120,6 @@ export default function MusicPanel({
   voiceDuration,
   voiceVolume,
   musicVolume,
-  onSelect,
   onUpload,
   onRemove,
   onAudition,
@@ -100,13 +127,7 @@ export default function MusicPanel({
   onMusicVolume,
   onError,
 }: MusicPanelProps) {
-  const [filter, setFilter] = useState<Filter>('All');
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const tracks = useMemo(
-    () => (filter === 'All' ? MUSIC_LIBRARY : MUSIC_LIBRARY.filter((t) => t.category === filter)),
-    [filter],
-  );
 
   const handleFile = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -121,7 +142,7 @@ export default function MusicPanel({
   };
 
   const coverage = selected ? musicCoverage(selected.duration, voiceDuration) : null;
-  const filters: Filter[] = ['All', ...POPULATED_CATEGORIES];
+  const uploading = loadingId === 'upload';
 
   return (
     <section className="panel" aria-labelledby="step-music">
@@ -133,14 +154,13 @@ export default function MusicPanel({
         <span className="label-mono ml-auto">Optional</span>
       </header>
 
-      {/* Selected track */}
       {selected ? (
         <div className="mb-6 border border-ember/40 bg-ember/[0.07] px-4 py-3.5">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <p className="truncate text-sm text-bone">{selected.title}</p>
               <p className="label-mono mt-1.5 normal-case tracking-normal">
-                {selected.category} · {formatDuration(selected.duration)} · {selected.artist}
+                Your song · {formatDuration(selected.duration)}
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
@@ -148,7 +168,7 @@ export default function MusicPanel({
                 type="button"
                 onClick={() => onAudition(selected.id, selected.url)}
                 className="chip !px-3 !py-2.5 text-ash hover:text-bone"
-                aria-label={auditionId === selected.id ? 'Pause this track' : 'Play this track'}
+                aria-label={auditionId === selected.id ? 'Pause your song' : 'Play your song'}
               >
                 {auditionId === selected.id ? (
                   <PauseIcon className="h-4 w-4" />
@@ -178,179 +198,97 @@ export default function MusicPanel({
               {MUSIC_FADE_SECONDS.toFixed(1)}s fade in and out
             </p>
           )}
-          <p className="label-mono mt-1.5 normal-case tracking-normal">
-            License: {selected.license}
-          </p>
         </div>
       ) : (
         <p className="mb-6 text-sm leading-relaxed text-ash">
-          Add a music bed under your voice, or leave this out — the video exports fine either way.
+          Leave the video voice-only, or upload one song from your device.
         </p>
       )}
 
-      {/* Volume */}
       <div className="mb-7 grid gap-5 border-y border-bone/10 py-6 sm:grid-cols-2 sm:gap-7">
         <VolumeSlider
           id="voice-volume"
           label="Voice volume"
-          hint="Your recording"
+          hint={voiceDuration > 0 ? 'Changes Preview immediately' : 'Record or upload a voice first'}
           value={voiceVolume}
+          disabled={voiceDuration <= 0}
           onChange={onVoiceVolume}
         />
         <VolumeSlider
           id="music-volume"
           label="Music volume"
-          hint={selected ? 'Under the voice' : 'Applies once a track is picked'}
+          hint={selected ? 'Changes the song and Preview immediately' : 'Upload a song first'}
           value={musicVolume}
+          disabled={!selected}
           onChange={onMusicVolume}
         />
       </div>
 
-      {/* Category filter */}
-      <div className="mb-4 flex flex-wrap gap-2">
-        {filters.map((name) => {
-          const active = filter === name;
-          return (
-            <button
-              key={name}
-              type="button"
-              onClick={() => setFilter(name)}
-              aria-pressed={active}
-              className="rounded-full border px-3.5 py-1.5 font-mono text-[0.6875rem] uppercase tracking-[0.12em] transition-colors"
-              style={{
-                borderColor: active ? 'var(--color-ember)' : 'rgba(242,236,224,0.16)',
-                color: active ? 'var(--color-ember)' : 'var(--color-ash)',
-                background: active ? 'rgba(240,135,60,0.1)' : 'transparent',
-              }}
-            >
-              {name}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Track cards. "No music" is a card of its own rather than only a remove
-          button, so leaving music out is an explicit choice you can see is active. */}
-      <ul className="grid gap-2.5 sm:grid-cols-2" role="list">
-        <li>
-          <div
-            className="flex h-full items-center gap-3 border px-3.5 py-3 transition-colors"
-            style={{
-              borderColor: selected ? 'rgba(242,236,224,0.12)' : 'var(--color-ember)',
-              background: selected ? 'rgba(242,236,224,0.02)' : 'rgba(240,135,60,0.07)',
-            }}
-          >
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-bone/15 text-ash">
-              <MuteIcon className="h-4 w-4" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm text-bone">No music</p>
-              <p className="label-mono mt-1 normal-case tracking-normal">Voice only</p>
-            </div>
-            <button
-              type="button"
-              onClick={onRemove}
-              disabled={!selected}
-              className="chip shrink-0 !px-3 !py-2 disabled:opacity-100"
-              style={selected ? undefined : { borderColor: 'var(--color-ember)', color: 'var(--color-ember)' }}
-              aria-label={selected ? 'Export with no background music' : 'No music selected'}
-            >
-              {selected ? 'Select' : <CheckIcon className="h-3.5 w-3.5" />}
-            </button>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div
+          className="flex items-center gap-3 border px-3.5 py-3 transition-colors"
+          style={{
+            borderColor: selected ? 'rgba(242,236,224,0.12)' : 'var(--color-ember)',
+            background: selected ? 'rgba(242,236,224,0.02)' : 'rgba(240,135,60,0.07)',
+          }}
+        >
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-bone/15 text-ash">
+            <MuteIcon className="h-4 w-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm text-bone">No music</p>
+            <p className="label-mono mt-1 normal-case tracking-normal">Voice only</p>
           </div>
-        </li>
+          <button
+            type="button"
+            onClick={onRemove}
+            disabled={!selected}
+            className="chip shrink-0 !px-3 !py-2 disabled:opacity-100"
+            style={
+              selected
+                ? undefined
+                : { borderColor: 'var(--color-ember)', color: 'var(--color-ember)' }
+            }
+            aria-label={selected ? 'Export with no background music' : 'No music selected'}
+          >
+            {selected ? 'Select' : <CheckIcon className="h-3.5 w-3.5" />}
+          </button>
+        </div>
 
-        {tracks.map((track) => {
-          const isSelected = selected?.id === track.id;
-          const isAuditioning = auditionId === track.id;
-          const isLoading = loadingId === track.id;
-          return (
-            <li key={track.id}>
-              <div
-                className="flex h-full items-center gap-3 border px-3.5 py-3 transition-colors"
-                style={{
-                  borderColor: isSelected ? 'var(--color-ember)' : 'rgba(242,236,224,0.12)',
-                  background: isSelected ? 'rgba(240,135,60,0.07)' : 'rgba(242,236,224,0.02)',
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => onAudition(track.id, track.src)}
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-bone/20 text-bone transition-colors hover:border-bone/50"
-                  aria-label={`${isAuditioning ? 'Pause' : 'Preview'} ${track.title}`}
-                >
-                  {isAuditioning ? (
-                    <PauseIcon className="h-3.5 w-3.5" />
-                  ) : (
-                    <PlayIcon className="h-3.5 w-3.5" />
-                  )}
-                </button>
-
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm text-bone">{track.title}</p>
-                  <p className="label-mono mt-1 normal-case tracking-normal">
-                    {track.category} · {formatDuration(track.duration)}
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => onSelect(track)}
-                  disabled={isLoading || isSelected}
-                  className="chip shrink-0 !px-3 !py-2 disabled:opacity-100"
-                  style={
-                    isSelected
-                      ? { borderColor: 'var(--color-ember)', color: 'var(--color-ember)' }
-                      : undefined
-                  }
-                  aria-label={isSelected ? `${track.title} selected` : `Use ${track.title}`}
-                >
-                  {isLoading ? (
-                    <SpinnerIcon className="h-3.5 w-3.5" />
-                  ) : isSelected ? (
-                    <CheckIcon className="h-3.5 w-3.5" />
-                  ) : (
-                    'Select'
-                  )}
-                </button>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-
-      {/* Upload */}
-      <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center">
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          disabled={loadingId === 'upload'}
-          className="chip justify-center py-3 sm:w-auto"
+          disabled={uploading}
+          className="flex items-center gap-3 border border-bone/15 bg-bone/[0.02] px-3.5 py-3 text-left transition-colors hover:border-bone/35 disabled:opacity-60"
         >
-          {loadingId === 'upload' ? (
-            <SpinnerIcon className="h-4 w-4" />
-          ) : (
-            <UploadIcon className="h-4 w-4" />
-          )}
-          {loadingId === 'upload' ? 'Reading track' : 'Upload your own music'}
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-bone/15 text-bone">
+            {uploading ? <SpinnerIcon className="h-4 w-4" /> : <UploadIcon className="h-4 w-4" />}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm text-bone">
+              {uploading ? 'Reading your song' : selected ? 'Replace your song' : 'Upload your song'}
+            </span>
+            <span className="label-mono mt-1 block normal-case tracking-normal">
+              {MUSIC_FORMAT_LABEL}
+            </span>
+          </span>
         </button>
-        <p className="label-mono normal-case tracking-normal">{MUSIC_FORMAT_LABEL}</p>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept={MUSIC_UPLOAD_ACCEPT}
-          onChange={handleFile}
-          aria-hidden="true"
-          tabIndex={-1}
-        />
       </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={MUSIC_UPLOAD_ACCEPT}
+        onChange={handleFile}
+        aria-hidden="true"
+        tabIndex={-1}
+      />
 
       <div className="mt-6 flex items-start gap-3 border-t border-bone/10 pt-5 text-sm text-ash">
         <MusicIcon className="mt-0.5 h-4 w-4 shrink-0" />
         <p className="leading-relaxed">
-          Every built-in track was synthesised for GLASKO and is released into the public domain
-          (CC0), so there is nothing to clear before you post. If you upload your own music, make
-          sure you have the right to use it — platforms mute or block videos over copyrighted audio.
+          Use a song you own or have permission to use. Facebook, Instagram and other platforms
+          may mute a video that contains copyrighted music.
         </p>
       </div>
     </section>

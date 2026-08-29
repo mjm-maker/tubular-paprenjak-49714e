@@ -12,8 +12,8 @@
  * query string, never logged, and never stored by this application in any form —
  * hashed or otherwise. If you add a field to these forms, keep that property.
  *
- * The editor does not read any of this. An account is additive: signed out, signed in,
- * or Identity not enabled at all, every step of the video pipeline behaves the same.
+ * `AccountGate` requires a settled signed-in session before it mounts the editor. The
+ * account still carries no video data: recording and rendering remain browser-only.
  */
 
 import { AuthError, MissingIdentityError } from '@netlify/identity';
@@ -28,6 +28,7 @@ export type AuthAction = 'login' | 'signup' | 'recovery' | 'reset' | 'callback';
 export interface SignupFields {
   name: string;
   email: string;
+  phone: string;
   password: string;
   confirm: string;
 }
@@ -57,6 +58,18 @@ export function validateEmail(email: string): string | null {
   return null;
 }
 
+/** Optional, international-friendly phone check. Identity stores the value as profile metadata. */
+export function validatePhone(phone: string): string | null {
+  const trimmed = phone.trim();
+  if (!trimmed) return null;
+  if (!/^[+\d\s().-]+$/.test(trimmed)) return 'Use a valid phone number, or leave it blank.';
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits.length < 7 || digits.length > 15) {
+    return 'Use 7 to 15 digits, including the country code.';
+  }
+  return null;
+}
+
 export function validatePassword(password: string): string | null {
   if (!password) return 'Choose a password.';
   if (password.length < MIN_PASSWORD) {
@@ -75,6 +88,8 @@ export function validateSignup(fields: SignupFields): FieldErrors {
   if (name) errors.name = name;
   const email = validateEmail(fields.email);
   if (email) errors.email = email;
+  const phone = validatePhone(fields.phone);
+  if (phone) errors.phone = phone;
   const password = validatePassword(fields.password);
   if (password) errors.password = password;
   else if (fields.password !== fields.confirm) errors.confirm = 'The two passwords do not match.';
@@ -103,12 +118,11 @@ const FALLBACK: Record<AuthAction, string> = {
  *
  * Two rules hold everywhere. A failed login never says which half was wrong, because
  * saying so tells an attacker which addresses have accounts. And Identity being absent
- * is not a failure — the same calm setup wording the subtitles panel uses, since the
- * rest of GLASKO carries on working without it.
+ * gets calm temporary-unavailability wording rather than exposing infrastructure detail.
  */
 export function describeAuthError(error: unknown, action: AuthAction): string {
   if (error instanceof MissingIdentityError) {
-    return 'Accounts are not switched on for this deployment yet. Everything else in the editor works without one.';
+    return 'Account access is temporarily unavailable. Please try again shortly.';
   }
 
   if (error instanceof AuthError) {

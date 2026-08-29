@@ -33,7 +33,7 @@ export default function AccountPage() {
     return (
       <AuthCard
         title="You are not logged in"
-        lede="Log in to see your account, or carry on without one."
+        lede="Log in to see your account and open the editor."
       >
         <div className="space-y-3">
           <Link href="/login" className="btn-primary">
@@ -48,10 +48,13 @@ export default function AccountPage() {
   }
 
   const created = memberSince(user.createdAt);
+  const phone =
+    typeof user.userMetadata?.phone === 'string' ? user.userMetadata.phone.trim() : '';
 
   const rows: Array<{ label: string; value: string }> = [
     { label: 'Name', value: user.name?.trim() || 'Not set' },
     { label: 'Email', value: user.email ?? 'Not available' },
+    ...(phone ? [{ label: 'Phone', value: phone }] : []),
     // Omitted rather than faked if Identity did not report a timestamp.
     ...(created ? [{ label: 'Account created', value: created }] : []),
   ];
@@ -94,7 +97,7 @@ export default function AccountPage() {
 
         <p className="label-mono normal-case tracking-normal leading-relaxed">
           Your recordings, images and exported videos are not uploaded here. They stay in the
-          browser tab that made them, and an account holds nothing but your name and email.
+          browser tab that made them. The account holds your name, email and optional phone only.
         </p>
 
         <div className="space-y-3">

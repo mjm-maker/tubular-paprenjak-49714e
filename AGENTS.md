@@ -138,6 +138,19 @@ The feature is enabled on deploy by the `netlify-identity` skill's activation sc
 
 `buildFilename('mp4')` produces `glasko-video-YYYY-MM-DD.mp4` from the local date, and the same helper names the `.srt` and `.vtt` downloads.
 
+### Live preview
+
+`components/LiveBroadcast.tsx` is the honest first step toward live broadcasting. The
+button under Preview opens a Facebook / Instagram destination picker and can place a
+`LIVE PREVIEW` status over the editor canvas. That status is interface-only: it is not
+drawn by `drawFrame`, does not enter the exported MP4 and does not publish anything.
+
+Keep the distinction explicit. A browser cannot send the canvas directly to an RTMP
+endpoint, and no Facebook or Instagram OAuth / upload API is configured. The component
+must continue to call this a preview until a secure server relay and the platforms'
+official connection flow exist; never turn the preview action into copy that claims the
+user is broadcasting.
+
 
 ### Visitor counter
 

@@ -395,3 +395,66 @@ export function SparkIcon({ className = 'h-4 w-4' }: IconProps) {
     </svg>
   );
 }
+
+/** Live broadcasting. Radio waves around one central point. */
+export function BroadcastIcon({ className = 'h-5 w-5' }: IconProps) {
+  return (
+    <svg
+      className={`${base} ${className}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none" />
+      <path d="M8.7 8.7a4.7 4.7 0 0 0 0 6.6M15.3 8.7a4.7 4.7 0 0 1 0 6.6" />
+      <path d="M5.5 5.5a9.2 9.2 0 0 0 0 13M18.5 5.5a9.2 9.2 0 0 1 0 13" />
+    </svg>
+  );
+}
+
+/** Close control for dialogs. */
+export function CloseIcon({ className = 'h-5 w-5' }: IconProps) {
+  return (
+    <svg
+      className={`${base} ${className}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="m6 6 12 12M18 6 6 18" />
+    </svg>
+  );
+}
+
+/** Facebook mark, kept monochrome so the surrounding control owns its colour. */
+export function FacebookIcon({ className = 'h-5 w-5' }: IconProps) {
+  return (
+    <svg className={`${base} ${className}`} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M13.7 21v-8h2.8l.4-3.1h-3.2v-2c0-.9.3-1.5 1.6-1.5H17V3.6c-.7-.1-1.5-.2-2.3-.2-2.3 0-3.9 1.4-3.9 4.1v2.4H8.2V13h2.6v8Z" />
+    </svg>
+  );
+}
+
+/** Instagram camera mark, kept monochrome so the surrounding control owns its colour. */
+export function InstagramIcon({ className = 'h-5 w-5' }: IconProps) {
+  return (
+    <svg
+      className={`${base} ${className}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      aria-hidden="true"
+    >
+      <rect x="3.5" y="3.5" width="17" height="17" rx="5" />
+      <circle cx="12" cy="12" r="3.8" />
+      <circle cx="17.4" cy="6.8" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}

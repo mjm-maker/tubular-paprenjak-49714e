@@ -8,6 +8,7 @@ import ExportPanel, { type ExportState } from '@/components/ExportPanel';
 import FormatPanel from '@/components/FormatPanel';
 import HeadlinePanel from '@/components/HeadlinePanel';
 import { PauseIcon, PlayIcon, AlertIcon } from '@/components/Icons';
+import LiveBroadcast, { type LivePlatform } from '@/components/LiveBroadcast';
 import MusicPanel from '@/components/MusicPanel';
 import PicturePanel from '@/components/PicturePanel';
 import PreviewStage from '@/components/PreviewStage';
@@ -36,7 +37,7 @@ import {
   type Pipeline,
 } from '@/lib/encode';
 import { DEFAULT_HEADLINE, headlineText, type HeadlineSettings } from '@/lib/headline';
-import { DEFAULT_FORMAT, formatById, type FormatId } from '@/lib/layout';
+import { DEFAULT_FORMAT, describeFormat, formatById, type FormatId } from '@/lib/layout';
 import { type BrandLogo, loadBrandLogo } from '@/lib/logo';
 import {
   buildDuckEnvelope,
@@ -162,6 +163,10 @@ export default function Home() {
   // Dev-only, resolved from the URL in an effect below.
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [forcedPipeline, setForcedPipeline] = useState<Pipeline | null>(null);
+  // Live is a visual setup preview for now. It never claims to have opened a real
+  // platform stream before Facebook or Instagram has been securely connected.
+  const [livePreview, setLivePreview] = useState(false);
+  const [livePlatform, setLivePlatform] = useState<LivePlatform>('facebook');
 
   // Output shape and branding.
   const [formatId, setFormatId] = useState<FormatId>(DEFAULT_FORMAT.id);
@@ -642,6 +647,20 @@ export default function Home() {
       .then(() => setPlaying(true))
       .catch(() => setNotice('Preview sound could not start. Tap the play button again.'));
   }, [music, playing, source, stopAudition, voiceVolume]);
+
+  const startLivePreview = useCallback(
+    (platform: LivePlatform) => {
+      setLivePlatform(platform);
+      setLivePreview(true);
+      if (source && !playing) togglePlay();
+    },
+    [playing, source, togglePlay],
+  );
+
+  const stopLivePreview = useCallback(() => {
+    setLivePreview(false);
+    pausePreview();
+  }, [pausePreview]);
 
   /* ---------------------------------------------------------------- subtitles */
 
@@ -1268,7 +1287,25 @@ export default function Home() {
                 Sample motion
               </span>
             )}
+
+            {livePreview && (
+              <span className="pointer-events-none absolute right-3.5 top-3.5 flex items-center gap-2 rounded-full border border-clay/70 bg-ink/80 px-3 py-2 font-mono text-[0.625rem] uppercase tracking-[0.14em] text-bone backdrop-blur-md">
+                <span className="h-2 w-2 rounded-full bg-clay shadow-[0_0_0_4px_rgba(180,80,44,0.2)] motion-safe:animate-pulse" />
+                Live preview · {livePlatform === 'facebook' ? 'Facebook' : 'Instagram'}
+              </span>
+            )}
           </PreviewStage>
+
+          <LiveBroadcast
+            format={describeFormat(format)}
+            hasAudio={Boolean(source)}
+            previewing={livePreview}
+            platform={livePlatform}
+            disabled={busy}
+            onPlatform={setLivePlatform}
+            onPreview={startLivePreview}
+            onStopPreview={stopLivePreview}
+          />
         </aside>
 
         <div className="order-3 lg:col-start-1 lg:row-start-2">

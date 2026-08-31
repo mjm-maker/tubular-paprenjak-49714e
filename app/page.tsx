@@ -7,6 +7,7 @@ import BackgroundPanel from '@/components/BackgroundPanel';
 import ExportPanel, { type ExportState } from '@/components/ExportPanel';
 import FormatPanel from '@/components/FormatPanel';
 import HeadlinePanel from '@/components/HeadlinePanel';
+import LiveCameraTest from '@/components/LiveCameraTest';
 import { PauseIcon, PlayIcon, AlertIcon } from '@/components/Icons';
 import LiveBroadcast, { type LivePlatform } from '@/components/LiveBroadcast';
 import MusicPanel from '@/components/MusicPanel';
@@ -1183,6 +1184,8 @@ export default function Home() {
           <p className="text-bone">{notice}</p>
         </div>
       )}
+
+      <LiveCameraTest onError={setNotice} />
 
       <div className="mt-10 grid gap-x-16 lg:grid-cols-[minmax(0,1fr)_356px] lg:items-start">
         <div className="order-1 lg:col-start-1 lg:row-start-1">
